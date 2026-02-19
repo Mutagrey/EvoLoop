@@ -53,6 +53,18 @@
       "problemMatcher": []
     },
     {
+      "label": "Agent: Install User Command",
+      "type": "process",
+      "command": "${workspaceFolder}/scripts/install-user-command.sh",
+      "windows": {
+        "command": "${workspaceFolder}\\scripts\\install-user-command.cmd"
+      },
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    },
+    {
       "label": "Agent: Build",
       "type": "process",
       "command": "dotnet",

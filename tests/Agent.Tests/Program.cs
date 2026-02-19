@@ -35,7 +35,8 @@ var tests = new List<(string Name, Func<Task> Run)>
     ("ReAct loop executes tool then final", TestLoopToolThenFinal),
     ("Fallback lexical search returns results", TestFallbackLexicalSearch),
     ("ReAct loop injects workspace memory into model context", TestLoopInjectsWorkspaceMemory),
-    ("Workspace memory store persists and loads context", TestWorkspaceMemoryStorePersistsAndLoadsContext)
+    ("Workspace memory store persists and loads context", TestWorkspaceMemoryStorePersistsAndLoadsContext),
+    ("Workspace memory survives project directory move", TestWorkspaceMemorySurvivesDirectoryMove)
 };
 
 var failed = 0;
@@ -877,6 +878,59 @@ static async Task TestWorkspaceMemoryStorePersistsAndLoadsContext()
         if (Directory.Exists(temp))
         {
             Directory.Delete(temp, true);
+        }
+    }
+}
+
+static async Task TestWorkspaceMemorySurvivesDirectoryMove()
+{
+    var baseDir = Path.Combine(Path.GetTempPath(), "agent-tests-memory-move-" + Guid.NewGuid().ToString("n"));
+    var original = Path.Combine(baseDir, "repo-original");
+    var moved = Path.Combine(baseDir, "repo-moved");
+    Directory.CreateDirectory(original);
+
+    try
+    {
+        var config = new AgentConfig();
+        var store = new WorkspaceMemoryStore(original, config);
+        var steps = new List<SessionStep>
+        {
+            new(
+                SessionId: "s-move",
+                StepNumber: 1,
+                Action: "tool",
+                ToolName: "fs_write",
+                Reasoning: "create file",
+                Success: true,
+                Output: "Wrote file: src/Move.cs",
+                TimestampUtc: DateTimeOffset.UtcNow,
+                DurationMs: 10,
+                Error: null)
+        };
+
+        await store.SaveRunAsync(new WorkspaceMemoryRecord(
+            WorkspaceRoot: original,
+            SessionId: "s-move",
+            Task: "create move file",
+            Success: true,
+            FinalMessage: "done",
+            Steps: steps,
+            CompletedAtUtc: DateTimeOffset.UtcNow), CancellationToken.None);
+
+        Directory.Move(original, moved);
+
+        var movedStore = new WorkspaceMemoryStore(moved, config);
+        var loaded = await movedStore.LoadContextAsync(moved, "edit move file", CancellationToken.None);
+        Assert(loaded.EntriesUsed > 0, "Expected memory entries to remain available after directory move.");
+
+        var identityPath = Path.Combine(moved, ".evoloop", "project.identity.json");
+        Assert(File.Exists(identityPath), "Expected project identity file to exist after move.");
+    }
+    finally
+    {
+        if (Directory.Exists(baseDir))
+        {
+            Directory.Delete(baseDir, true);
         }
     }
 }

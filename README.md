@@ -92,9 +92,17 @@ Persistent memory and automatic context compression:
 How it works:
 
 - memory is stored locally in `.evoloop/storage/memory-runs.jsonl` (no remote telemetry)
+- project identity is stored in `.evoloop/project.identity.json` to bind memory to project (not random current folder)
+- optional user-local mirror is kept in `~/.evoloop/memory/<project-id>.jsonl` for portability across path changes
 - on startup, agent injects relevant snippets from previous runs into model context
 - when context grows too large, old turns are compacted into structured summary automatically
 - adaptive prompt layer tightens output contract after format failures (self-correction loop)
+
+Path-change behavior:
+
+- if you move/rename the whole project directory, memory is preserved (same project identity file moves with project)
+- if you run from nested folders inside a repo, CLI auto-resolves workspace to git root
+- if project identity is missing but git `origin` exists, identity is derived from origin URL
 
 The agent will request JSON-formatted output from the model and fallback automatically if gateway does not support `response_format`.
 Default mode is `user` because many gateways ignore/deprioritize `system`. If gateway supports strict system role well, you can switch to `system` or `both`.
@@ -196,6 +204,25 @@ export EVOLOOP_API_KEY="your_token_here"
 HOME=/tmp DOTNET_CLI_HOME=/tmp DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1 DOTNET_CLI_TELEMETRY_OPTOUT=1 dotnet run --project src/Agent.Cli -- run "analyze git status and summarize" --profile reasoning
 ```
 
+## Global Command Without Admin Rights
+
+You can install a user-level `agent` command (no admin, no system PATH edit).
+
+macOS/Linux:
+
+```bash
+./scripts/install-user-command.sh
+source ~/.zshrc
+```
+
+Windows (PowerShell/CMD):
+
+```cmd
+scripts\\install-user-command.cmd
+```
+
+After this, `agent` is available from any directory. The wrapper passes `--workspace <current-directory>`.
+
 ## Run With Offline Strict Mode
 
 `--offline-strict` blocks network shell commands by policy.  
@@ -235,9 +262,11 @@ Example combinations:
 - `/tools`
 - `/history`
 - `/memory`
+- `/cmdlog`
 - `/config`
 - `/approve` and `/deny` (informational; approvals are inline)
 - `/exit`
+- `!N` (rerun command N from `/cmdlog`)
 
 During run, CLI now shows:
 

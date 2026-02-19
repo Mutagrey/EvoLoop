@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Agent.Core;
@@ -13,15 +14,24 @@ public sealed class WorkspaceMemoryStore : IWorkspaceMemoryStore
     };
 
     private readonly AgentConfig _config;
+    private readonly string _workspaceRoot;
+    private readonly string _workspaceRootHash;
+    private readonly string _projectId;
     private readonly string _runsPath;
+    private readonly string? _portableRunsPath;
     private readonly SemaphoreSlim _gate = new(1, 1);
 
     public WorkspaceMemoryStore(string workspaceRoot, AgentConfig config)
     {
         _config = config;
-        var storageRoot = Path.Combine(workspaceRoot, ".evoloop", "storage");
+        _workspaceRoot = Path.GetFullPath(workspaceRoot);
+        _workspaceRootHash = ComputeSha256Hex(NormalizePath(_workspaceRoot));
+        _projectId = ResolveOrCreateProjectIdentity(_workspaceRoot);
+
+        var storageRoot = Path.Combine(_workspaceRoot, ".evoloop", "storage");
         Directory.CreateDirectory(storageRoot);
         _runsPath = Path.Combine(storageRoot, "memory-runs.jsonl");
+        _portableRunsPath = TryResolvePortableRunsPath(_projectId);
     }
 
     public async Task<WorkspaceMemoryContext> LoadContextAsync(string workspaceRoot, string task, CancellationToken ct)
@@ -76,14 +86,33 @@ public sealed class WorkspaceMemoryStore : IWorkspaceMemoryStore
             return;
         }
 
-        var entry = BuildEntry(record, _config.Runtime.ObservationMaxChars);
+        var entry = BuildEntry(
+            record,
+            _config.Runtime.ObservationMaxChars,
+            _projectId,
+            _workspaceRoot,
+            _workspaceRootHash);
         var line = JsonSerializer.Serialize(entry, JsonOptions) + Environment.NewLine;
 
         await _gate.WaitAsync(ct);
         try
         {
-            await File.AppendAllTextAsync(_runsPath, line, Encoding.UTF8, ct);
-            await PruneIfNeededAsync(ct);
+            await AppendLineAsync(_runsPath, line, ct);
+            await PruneIfNeededAsync(_runsPath, ct);
+
+            if (!string.IsNullOrWhiteSpace(_portableRunsPath) &&
+                !_portableRunsPath.Equals(_runsPath, StringComparison.OrdinalIgnoreCase))
+            {
+                try
+                {
+                    await AppendLineAsync(_portableRunsPath, line, ct);
+                    await PruneIfNeededAsync(_portableRunsPath, ct);
+                }
+                catch
+                {
+                    // Portable mirror is best-effort and should never fail the run.
+                }
+            }
         }
         finally
         {
@@ -93,12 +122,55 @@ public sealed class WorkspaceMemoryStore : IWorkspaceMemoryStore
 
     private async Task<List<MemoryRunEntry>> LoadEntriesAsync(CancellationToken ct)
     {
-        if (!File.Exists(_runsPath))
+        var merged = new Dictionary<string, MemoryRunEntry>(StringComparer.OrdinalIgnoreCase);
+        foreach (var source in EnumerateSources())
+        {
+            var entries = await LoadEntriesFromPathAsync(source.Path, ct);
+            foreach (var entry in entries)
+            {
+                if (!EntryBelongsToCurrentProject(entry, source.AllowLegacyWithoutIdentity))
+                {
+                    continue;
+                }
+
+                if (merged.TryGetValue(entry.SessionId, out var existing))
+                {
+                    if (entry.CompletedAtUtc > existing.CompletedAtUtc)
+                    {
+                        merged[entry.SessionId] = entry;
+                    }
+                }
+                else
+                {
+                    merged[entry.SessionId] = entry;
+                }
+            }
+        }
+
+        return merged.Values
+            .OrderByDescending(e => e.CompletedAtUtc)
+            .ToList();
+    }
+
+    private IEnumerable<(string Path, bool AllowLegacyWithoutIdentity)> EnumerateSources()
+    {
+        yield return (_runsPath, true);
+
+        if (!string.IsNullOrWhiteSpace(_portableRunsPath) &&
+            !_portableRunsPath.Equals(_runsPath, StringComparison.OrdinalIgnoreCase))
+        {
+            yield return (_portableRunsPath, false);
+        }
+    }
+
+    private async Task<List<MemoryRunEntry>> LoadEntriesFromPathAsync(string path, CancellationToken ct)
+    {
+        if (!File.Exists(path))
         {
             return new List<MemoryRunEntry>();
         }
 
-        var lines = await File.ReadAllLinesAsync(_runsPath, ct);
+        var lines = await File.ReadAllLinesAsync(path, ct);
         var entries = new List<MemoryRunEntry>(lines.Length);
         foreach (var line in lines)
         {
@@ -120,7 +192,10 @@ public sealed class WorkspaceMemoryStore : IWorkspaceMemoryStore
                     Task = parsed.Task ?? string.Empty,
                     FinalMessage = parsed.FinalMessage ?? string.Empty,
                     Summary = parsed.Summary ?? string.Empty,
-                    Highlights = parsed.Highlights ?? Array.Empty<string>()
+                    Highlights = parsed.Highlights ?? Array.Empty<string>(),
+                    ProjectId = parsed.ProjectId ?? string.Empty,
+                    WorkspaceRoot = parsed.WorkspaceRoot ?? string.Empty,
+                    WorkspaceRootHash = parsed.WorkspaceRootHash ?? string.Empty
                 };
 
                 entries.Add(parsed);
@@ -134,14 +209,53 @@ public sealed class WorkspaceMemoryStore : IWorkspaceMemoryStore
         return entries;
     }
 
-    private async Task PruneIfNeededAsync(CancellationToken ct)
+    private bool EntryBelongsToCurrentProject(MemoryRunEntry entry, bool allowLegacyWithoutIdentity)
     {
-        if (!File.Exists(_runsPath))
+        if (!string.IsNullOrWhiteSpace(entry.ProjectId))
+        {
+            return entry.ProjectId.Equals(_projectId, StringComparison.OrdinalIgnoreCase);
+        }
+
+        if (!string.IsNullOrWhiteSpace(entry.WorkspaceRootHash))
+        {
+            return entry.WorkspaceRootHash.Equals(_workspaceRootHash, StringComparison.OrdinalIgnoreCase);
+        }
+
+        if (!string.IsNullOrWhiteSpace(entry.WorkspaceRoot))
+        {
+            try
+            {
+                var normalized = NormalizePath(Path.GetFullPath(entry.WorkspaceRoot));
+                return normalized.Equals(NormalizePath(_workspaceRoot), StringComparison.OrdinalIgnoreCase);
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        return allowLegacyWithoutIdentity;
+    }
+
+    private async Task AppendLineAsync(string path, string line, CancellationToken ct)
+    {
+        var dir = Path.GetDirectoryName(path);
+        if (!string.IsNullOrWhiteSpace(dir))
+        {
+            Directory.CreateDirectory(dir);
+        }
+
+        await File.AppendAllTextAsync(path, line, Encoding.UTF8, ct);
+    }
+
+    private async Task PruneIfNeededAsync(string path, CancellationToken ct)
+    {
+        if (!File.Exists(path))
         {
             return;
         }
 
-        var lines = await File.ReadAllLinesAsync(_runsPath, ct);
+        var lines = await File.ReadAllLinesAsync(path, ct);
         var maxLines = Math.Max(200, _config.Runtime.MemoryMaxRuns * 20);
         if (lines.Length <= maxLines)
         {
@@ -149,7 +263,7 @@ public sealed class WorkspaceMemoryStore : IWorkspaceMemoryStore
         }
 
         var keep = lines.Skip(lines.Length - maxLines).ToArray();
-        await File.WriteAllLinesAsync(_runsPath, keep, Encoding.UTF8, ct);
+        await File.WriteAllLinesAsync(path, keep, Encoding.UTF8, ct);
     }
 
     private static IEnumerable<MemoryRunEntry> RankEntries(IEnumerable<MemoryRunEntry> entries, string task)
@@ -206,7 +320,12 @@ public sealed class WorkspaceMemoryStore : IWorkspaceMemoryStore
         return $"- [{stamp}] {status} task=\"{task}\" | {summary}";
     }
 
-    private static MemoryRunEntry BuildEntry(WorkspaceMemoryRecord record, int summaryMaxChars)
+    private static MemoryRunEntry BuildEntry(
+        WorkspaceMemoryRecord record,
+        int summaryMaxChars,
+        string projectId,
+        string workspaceRoot,
+        string workspaceRootHash)
     {
         var toolCounts = record.Steps
             .GroupBy(step => step.ToolName, StringComparer.OrdinalIgnoreCase)
@@ -255,7 +374,10 @@ public sealed class WorkspaceMemoryStore : IWorkspaceMemoryStore
             record.FinalMessage,
             summary,
             highlights,
-            0.0);
+            0.0,
+            projectId,
+            workspaceRoot,
+            workspaceRootHash);
     }
 
     private static IEnumerable<string> ExtractHighlights(IEnumerable<SessionStep> steps)
@@ -301,6 +423,247 @@ public sealed class WorkspaceMemoryStore : IWorkspaceMemoryStore
         return line[..maxLength] + "...";
     }
 
+    private static string NormalizePath(string path)
+    {
+        return path.Replace('\\', '/').Trim();
+    }
+
+    private static string ComputeSha256Hex(string value)
+    {
+        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(value));
+        return Convert.ToHexString(hash).ToLowerInvariant();
+    }
+
+    private string ResolveOrCreateProjectIdentity(string workspaceRoot)
+    {
+        var identityPath = Path.Combine(workspaceRoot, ".evoloop", "project.identity.json");
+        var identityDir = Path.GetDirectoryName(identityPath);
+        if (!string.IsNullOrWhiteSpace(identityDir))
+        {
+            Directory.CreateDirectory(identityDir);
+        }
+
+        ProjectIdentityDocument? existing = null;
+        if (File.Exists(identityPath))
+        {
+            try
+            {
+                existing = JsonSerializer.Deserialize<ProjectIdentityDocument>(File.ReadAllText(identityPath), JsonOptions);
+            }
+            catch
+            {
+                existing = null;
+            }
+        }
+
+        var projectId = existing?.ProjectId?.Trim();
+        var createdAtUtc = existing?.CreatedAtUtc;
+        var firstWorkspaceRoot = existing?.FirstWorkspaceRoot;
+        var derivation = existing?.Derivation;
+
+        if (string.IsNullOrWhiteSpace(projectId))
+        {
+            var origin = TryReadGitOriginUrl(workspaceRoot);
+            if (!string.IsNullOrWhiteSpace(origin))
+            {
+                projectId = "git-" + ComputeSha256Hex(origin.Trim().ToLowerInvariant())[..24];
+                derivation = "git_origin";
+            }
+            else
+            {
+                projectId = "local-" + Guid.NewGuid().ToString("n");
+                derivation = "local_guid";
+            }
+        }
+
+        createdAtUtc ??= DateTimeOffset.UtcNow.ToString("O");
+        firstWorkspaceRoot ??= workspaceRoot;
+        derivation ??= "local_guid";
+
+        var normalizedCurrentRoot = Path.GetFullPath(workspaceRoot);
+        var needsSave = existing is null ||
+                        !string.Equals(existing.ProjectId, projectId, StringComparison.Ordinal) ||
+                        !string.Equals(existing.LastWorkspaceRoot, normalizedCurrentRoot, StringComparison.Ordinal) ||
+                        !string.Equals(existing.FirstWorkspaceRoot, firstWorkspaceRoot, StringComparison.Ordinal) ||
+                        !string.Equals(existing.Derivation, derivation, StringComparison.Ordinal);
+
+        if (needsSave)
+        {
+            var doc = new ProjectIdentityDocument(
+                projectId,
+                createdAtUtc,
+                firstWorkspaceRoot,
+                normalizedCurrentRoot,
+                derivation);
+            try
+            {
+                File.WriteAllText(identityPath, JsonSerializer.Serialize(doc, JsonOptions), Encoding.UTF8);
+            }
+            catch
+            {
+                // Identity persistence is best-effort.
+            }
+        }
+
+        return projectId;
+    }
+
+    private static string? TryResolvePortableRunsPath(string projectId)
+    {
+        var dataRoot = GetUserDataRoot();
+        if (string.IsNullOrWhiteSpace(dataRoot))
+        {
+            return null;
+        }
+
+        try
+        {
+            var memoryRoot = Path.Combine(dataRoot, "memory");
+            Directory.CreateDirectory(memoryRoot);
+            return Path.Combine(memoryRoot, $"{projectId}.jsonl");
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static string? GetUserDataRoot()
+    {
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        if (!string.IsNullOrWhiteSpace(home))
+        {
+            return Path.Combine(home, ".evoloop");
+        }
+
+        var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        if (!string.IsNullOrWhiteSpace(localAppData))
+        {
+            return Path.Combine(localAppData, "EvoLoop");
+        }
+
+        return null;
+    }
+
+    private static string? TryReadGitOriginUrl(string workspaceRoot)
+    {
+        var configPath = TryResolveGitConfigPath(workspaceRoot);
+        if (string.IsNullOrWhiteSpace(configPath) || !File.Exists(configPath))
+        {
+            return null;
+        }
+
+        try
+        {
+            var lines = File.ReadAllLines(configPath);
+            return ParseGitOriginUrl(lines);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static string? TryResolveGitConfigPath(string workspaceRoot)
+    {
+        var dotGit = Path.Combine(workspaceRoot, ".git");
+        if (Directory.Exists(dotGit))
+        {
+            return Path.Combine(dotGit, "config");
+        }
+
+        if (!File.Exists(dotGit))
+        {
+            return null;
+        }
+
+        try
+        {
+            var line = File.ReadLines(dotGit).FirstOrDefault();
+            if (string.IsNullOrWhiteSpace(line))
+            {
+                return null;
+            }
+
+            var trimmed = line.Trim();
+            if (!trimmed.StartsWith("gitdir:", StringComparison.OrdinalIgnoreCase))
+            {
+                return null;
+            }
+
+            var gitDirRaw = trimmed["gitdir:".Length..].Trim();
+            if (string.IsNullOrWhiteSpace(gitDirRaw))
+            {
+                return null;
+            }
+
+            var gitDir = Path.IsPathRooted(gitDirRaw)
+                ? gitDirRaw
+                : Path.GetFullPath(Path.Combine(workspaceRoot, gitDirRaw));
+            return Path.Combine(gitDir, "config");
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static string? ParseGitOriginUrl(IEnumerable<string> lines)
+    {
+        var inOrigin = false;
+        foreach (var raw in lines)
+        {
+            if (string.IsNullOrWhiteSpace(raw))
+            {
+                continue;
+            }
+
+            var line = raw.Trim();
+            if (line.StartsWith("#", StringComparison.Ordinal) || line.StartsWith(";", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            if (line.StartsWith("[", StringComparison.Ordinal) && line.EndsWith("]", StringComparison.Ordinal))
+            {
+                inOrigin = line.Equals("[remote \"origin\"]", StringComparison.OrdinalIgnoreCase);
+                continue;
+            }
+
+            if (!inOrigin)
+            {
+                continue;
+            }
+
+            var equalsIndex = line.IndexOf('=');
+            if (equalsIndex < 0)
+            {
+                continue;
+            }
+
+            var key = line[..equalsIndex].Trim();
+            if (!key.Equals("url", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var value = line[(equalsIndex + 1)..].Trim();
+            if (!string.IsNullOrWhiteSpace(value))
+            {
+                return value;
+            }
+        }
+
+        return null;
+    }
+
+    private sealed record ProjectIdentityDocument(
+        string ProjectId,
+        string CreatedAtUtc,
+        string FirstWorkspaceRoot,
+        string LastWorkspaceRoot,
+        string Derivation);
+
     private sealed record MemoryRunEntry(
         string SessionId,
         DateTimeOffset CompletedAtUtc,
@@ -309,5 +672,8 @@ public sealed class WorkspaceMemoryStore : IWorkspaceMemoryStore
         string FinalMessage,
         string Summary,
         string[] Highlights,
-        double RankScore);
+        double RankScore,
+        string ProjectId,
+        string WorkspaceRoot,
+        string WorkspaceRootHash);
 }
