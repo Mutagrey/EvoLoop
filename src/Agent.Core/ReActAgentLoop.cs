@@ -53,6 +53,8 @@ public sealed class ReActAgentLoop : IAgentLoop
         {
             new("user", request.Task)
         };
+        var requiresToolBeforeFinal = TaskLikelyRequiresTools(request.Task);
+        var toolStepsExecuted = 0;
 
         string finalMessage = "Agent ended without final answer.";
         bool success = false;
@@ -81,8 +83,26 @@ public sealed class ReActAgentLoop : IAgentLoop
                 await observer.OnEventAsync(new AgentRunEvent(AgentRunEventType.ModelCallCompleted, "Model response received", step), ct);
 
                 var decision = AgentDecisionParser.Parse(modelResult.Content);
+                if (decision.Type == AgentDecisionType.Invalid)
+                {
+                    history.Add(new ModelMessage("assistant", modelResult.Content));
+                    history.Add(new ModelMessage(
+                        "user",
+                        "OBSERVATION: Response format invalid. Return strict JSON only and choose a tool call or final schema."));
+                    continue;
+                }
+
                 if (decision.Type == AgentDecisionType.Final)
                 {
+                    if (requiresToolBeforeFinal && toolStepsExecuted == 0 && _tools.Count > 0)
+                    {
+                        history.Add(new ModelMessage("assistant", modelResult.Content));
+                        history.Add(new ModelMessage(
+                            "user",
+                            "OBSERVATION: This task requires workspace actions. Call an appropriate tool before returning final."));
+                        continue;
+                    }
+
                     finalMessage = decision.Message;
                     success = true;
                     break;
@@ -235,6 +255,7 @@ public sealed class ReActAgentLoop : IAgentLoop
 
                 trace.Add(stepRecord);
                 await _eventStore.AppendStepAsync(stepRecord, ct);
+                toolStepsExecuted++;
 
                 history.Add(new ModelMessage("assistant", modelResult.Content));
                 history.Add(new ModelMessage("user", BuildObservationMessage(tool.Name, result)));
@@ -263,21 +284,38 @@ public sealed class ReActAgentLoop : IAgentLoop
 
     private double GetTemperature(string profileName)
     {
-        return _config.Models.TryGetValue(profileName, out var profile) ? profile.Temperature : 0.2;
+        var raw = _config.Models.TryGetValue(profileName, out var profile) ? profile.Temperature : 0.2;
+        var min = _config.Runtime.ModelMinTemperature;
+        var max = _config.Runtime.ModelMaxTemperature;
+        if (max < min)
+        {
+            (min, max) = (max, min);
+        }
+
+        return Math.Clamp(raw, min, max);
     }
 
     private int GetMaxTokens(string profileName)
     {
-        return _config.Models.TryGetValue(profileName, out var profile) ? profile.MaxTokens : 1200;
+        var raw = _config.Models.TryGetValue(profileName, out var profile) ? profile.MaxTokens : 1200;
+        var min = _config.Runtime.ModelMinOutputTokens;
+        var max = _config.Runtime.ModelMaxOutputTokens;
+        if (max < min)
+        {
+            (min, max) = (max, min);
+        }
+
+        return Math.Clamp(raw, min, max);
     }
 
     private static string BuildSystemPrompt(IEnumerable<ITool> tools)
     {
         var sb = new StringBuilder();
-        sb.AppendLine("You are an autonomous coding CLI agent.");
-        sb.AppendLine("Work in a ReAct style: analyze, choose exactly one tool, observe result, and repeat.");
-        sb.AppendLine("Return STRICT JSON only, no markdown.");
-        sb.AppendLine("Schema:");
+        sb.AppendLine("You are EvoLoop Agent, a professional autonomous coding CLI engineer.");
+        sb.AppendLine("Primary objective: complete the user's task by using tools and producing concrete workspace outcomes.");
+        sb.AppendLine("Execution model: ReAct loop (analyze -> one tool call -> observe -> repeat).");
+        sb.AppendLine("Output contract: return STRICT JSON only. No markdown, prose wrappers, or code fences.");
+        sb.AppendLine("Decision schema:");
         sb.AppendLine("For tool call: {\"type\":\"tool\",\"tool\":\"tool_name\",\"reason\":\"why\",\"arguments\":{...}}");
         sb.AppendLine("For final response: {\"type\":\"final\",\"message\":\"...\"}");
         sb.AppendLine("For clarification request: {\"type\":\"clarify\",\"message\":\"...\"}");
@@ -296,6 +334,9 @@ public sealed class ReActAgentLoop : IAgentLoop
         sb.AppendLine("- Use only listed tools.");
         sb.AppendLine("- Read before you write.");
         sb.AppendLine("- Keep steps minimal and deterministic.");
+        sb.AppendLine("- Prefer direct file edits and concrete command execution over abstract advice.");
+        sb.AppendLine("- If the task asks to inspect/change files, run commands, or use git, you MUST call tools before final.");
+        sb.AppendLine("- Do not claim actions unless tool observations confirm them.");
         sb.AppendLine("- If task is done, return final.");
         return sb.ToString();
     }
@@ -344,13 +385,32 @@ public sealed class ReActAgentLoop : IAgentLoop
 
         return truncated + "\n[truncated]";
     }
+
+    private static bool TaskLikelyRequiresTools(string task)
+    {
+        if (string.IsNullOrWhiteSpace(task))
+        {
+            return false;
+        }
+
+        var normalized = task.ToLowerInvariant();
+        var keywords = new[]
+        {
+            "create", "edit", "update", "modify", "delete", "write", "patch",
+            "file", "folder", "project", "repository", "repo", "git", "commit",
+            "run", "build", "test", "search", "scan", "analyze code", "refactor"
+        };
+
+        return keywords.Any(keyword => normalized.Contains(keyword, StringComparison.Ordinal));
+    }
 }
 
 internal enum AgentDecisionType
 {
     Tool,
     Final,
-    Clarify
+    Clarify,
+    Invalid
 }
 
 internal sealed record AgentDecision(AgentDecisionType Type, string ToolName, JsonElement Arguments, string Reason, string Message)
@@ -358,6 +418,11 @@ internal sealed record AgentDecision(AgentDecisionType Type, string ToolName, Js
     public static AgentDecision Final(string message)
     {
         return new AgentDecision(AgentDecisionType.Final, string.Empty, default, string.Empty, message);
+    }
+
+    public static AgentDecision Invalid(string message)
+    {
+        return new AgentDecision(AgentDecisionType.Invalid, string.Empty, default, string.Empty, message);
     }
 }
 
@@ -369,17 +434,20 @@ internal static class AgentDecisionParser
     {
         if (string.IsNullOrWhiteSpace(content))
         {
-            return AgentDecision.Final("Empty model response.");
+            return AgentDecision.Invalid("Empty model response.");
         }
 
-        try
+        if (!TryParseJson(content, out var document))
         {
-            using var doc = JsonDocument.Parse(content);
-            var root = doc.RootElement;
+            return AgentDecision.Invalid("Response is not valid JSON.");
+        }
 
+        using (document)
+        {
+            var root = document.RootElement;
             if (!root.TryGetProperty("type", out var typeEl))
             {
-                return AgentDecision.Final(content.Trim());
+                return AgentDecision.Invalid("JSON missing required 'type' property.");
             }
 
             var type = typeEl.GetString()?.Trim().ToLowerInvariant();
@@ -398,12 +466,38 @@ internal static class AgentDecisionParser
                     root.TryGetProperty("arguments", out var argsEl) ? argsEl.Clone() : EmptyObject.RootElement.Clone(),
                     root.TryGetProperty("reason", out var reasonEl) ? reasonEl.GetString() ?? string.Empty : string.Empty,
                     string.Empty),
-                _ => AgentDecision.Final(content.Trim())
+                _ => AgentDecision.Invalid("Unknown decision type.")
             };
+        }
+    }
+
+    private static bool TryParseJson(string content, out JsonDocument document)
+    {
+        try
+        {
+            document = JsonDocument.Parse(content);
+            return true;
         }
         catch
         {
-            return AgentDecision.Final(content.Trim());
+            var start = content.IndexOf('{');
+            var end = content.LastIndexOf('}');
+            if (start >= 0 && end > start)
+            {
+                var candidate = content[start..(end + 1)];
+                try
+                {
+                    document = JsonDocument.Parse(candidate);
+                    return true;
+                }
+                catch
+                {
+                    // ignored
+                }
+            }
         }
+
+        document = null!;
+        return false;
     }
 }

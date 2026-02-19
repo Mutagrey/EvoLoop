@@ -1,6 +1,6 @@
 # EvoLoop Agent CLI
 
-Production-oriented autonomous coding agent CLI in pure C# (`.NET 6`) with no third-party libraries.
+Production-oriented autonomous coding agent CLI in pure C# (`.NET 9`) with no third-party libraries.
 
 ## Highlights
 
@@ -41,6 +41,25 @@ Profiles are mapped as:
 - `reasoning` -> DeepSeek
 - `fast` -> Qwen
 - `fallback` -> GLM
+
+Recommended profile tuning:
+
+- `reasoning` (DeepSeek): best for multi-step code changes, planning, and refactor tasks.
+  - `temperature: 0.15`
+  - `maxTokens: 1800`
+- `fast` (Qwen): best for quick checks, small edits, and summaries.
+  - `temperature: 0.10`
+  - `maxTokens: 900`
+- `fallback` (GLM): backup profile with balanced behavior.
+  - `temperature: 0.20`
+  - `maxTokens: 1200`
+
+Runtime safety boundaries (recommended):
+
+- `runtime.modelMinOutputTokens: 256`
+- `runtime.modelMaxOutputTokens: 4096`
+- `runtime.modelMinTemperature: 0.0`
+- `runtime.modelMaxTemperature: 0.7`
 
 Auth options (either one):
 

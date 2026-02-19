@@ -189,9 +189,9 @@ public sealed class AgentConfig
     public ApiConfig Api { get; init; } = new();
     public Dictionary<string, ModelProfileConfig> Models { get; init; } = new(StringComparer.OrdinalIgnoreCase)
     {
-        ["reasoning"] = new() { Provider = "custom", Model = "deepseek" },
-        ["fast"] = new() { Provider = "custom", Model = "qwen" },
-        ["fallback"] = new() { Provider = "custom", Model = "glm" }
+        ["reasoning"] = new() { Provider = "custom", Model = "deepseek", Temperature = 0.15, MaxTokens = 1800 },
+        ["fast"] = new() { Provider = "custom", Model = "qwen", Temperature = 0.10, MaxTokens = 900 },
+        ["fallback"] = new() { Provider = "custom", Model = "glm", Temperature = 0.20, MaxTokens = 1200 }
     };
 
     public WorkspaceConfig Workspace { get; init; } = new();
@@ -252,6 +252,10 @@ public sealed class RuntimeConfig
     public int MaxSteps { get; init; } = 30;
     public int ToolTimeoutSeconds { get; init; } = 120;
     public int MaxOutputBytes { get; init; } = 64 * 1024;
+    public int ModelMinOutputTokens { get; init; } = 256;
+    public int ModelMaxOutputTokens { get; init; } = 4096;
+    public double ModelMinTemperature { get; init; } = 0.0;
+    public double ModelMaxTemperature { get; init; } = 0.7;
     public int LexicalSearchDefaultMaxResults { get; init; } = 20;
     public int RerankCandidateLimit { get; init; } = 12;
 }

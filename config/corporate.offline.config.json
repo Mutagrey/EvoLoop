@@ -12,14 +12,14 @@
     "reasoning": {
       "provider": "custom",
       "model": "deepseek",
-      "temperature": 0.2,
-      "maxTokens": 1200
+      "temperature": 0.15,
+      "maxTokens": 1800
     },
     "fast": {
       "provider": "custom",
       "model": "qwen",
-      "temperature": 0.2,
-      "maxTokens": 1200
+      "temperature": 0.1,
+      "maxTokens": 900
     },
     "fallback": {
       "provider": "custom",
@@ -61,6 +61,10 @@
     "maxSteps": 30,
     "toolTimeoutSeconds": 120,
     "maxOutputBytes": 65536,
+    "modelMinOutputTokens": 256,
+    "modelMaxOutputTokens": 4096,
+    "modelMinTemperature": 0.0,
+    "modelMaxTemperature": 0.7,
     "lexicalSearchDefaultMaxResults": 20,
     "rerankCandidateLimit": 12
   },

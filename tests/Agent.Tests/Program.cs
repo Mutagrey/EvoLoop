@@ -12,6 +12,7 @@ var tests = new List<(string Name, Func<Task> Run)>
     ("Policy requires approval for writes", TestPolicyRequiresApprovalForWrite),
     ("Offline strict denies non-approved network shell", TestOfflineStrictDeniesNetworkShell),
     ("Offline strict allows approved gateway host with approval", TestOfflineStrictAllowsApprovedHostWithApproval),
+    ("ReAct loop retries on non-json model output", TestLoopRetriesOnNonJsonOutput),
     ("ReAct loop handles final response", TestLoopFinalResponse),
     ("ReAct loop executes tool then final", TestLoopToolThenFinal),
     ("Fallback lexical search returns results", TestFallbackLexicalSearch)
@@ -153,6 +154,30 @@ static async Task TestLoopFinalResponse()
     var result = await loop.RunAsync(new AgentRunRequest("say hi", Path.GetTempPath(), "reasoning", 5), CancellationToken.None);
     Assert(result.Success, "Expected final result success.");
     Assert(result.FinalMessage.Contains("done", StringComparison.OrdinalIgnoreCase), "Expected final message to contain done.");
+}
+
+static async Task TestLoopRetriesOnNonJsonOutput()
+{
+    var config = new AgentConfig();
+    var responses = new Queue<ModelTurnResult>();
+    responses.Enqueue(new ModelTurnResult("I will inspect files first.", "fake"));
+    responses.Enqueue(new ModelTurnResult("{\"type\":\"tool\",\"tool\":\"echo\",\"reason\":\"inspect\",\"arguments\":{\"value\":\"ok\"}}", "fake"));
+    responses.Enqueue(new ModelTurnResult("{\"type\":\"final\",\"message\":\"complete\"}", "fake"));
+
+    var router = new FakeModelRouter(new FakeModelClient(responses), "fake");
+    var tool = new EchoTool();
+    var loop = new ReActAgentLoop(
+        router,
+        new ITool[] { tool },
+        new DefaultPolicyEngine(config),
+        new AutoApproveService(true),
+        new InMemoryEventStore(),
+        new DefaultToolContextFactory(config, new NullSearchService()),
+        config);
+
+    var result = await loop.RunAsync(new AgentRunRequest("create a file with content", Path.GetTempPath(), "reasoning", 6), CancellationToken.None);
+    Assert(result.Success, "Expected success after retrying invalid model output.");
+    Assert(result.StepTrace.Count == 1, "Expected one executed tool step after invalid response retry.");
 }
 
 static async Task TestLoopToolThenFinal()
