@@ -1,4 +1,5 @@
 using System.Net.Http.Headers;
+using System.Net;
 using System.Text;
 using System.Text.Json;
 using Agent.Core;
@@ -126,6 +127,40 @@ internal abstract class ModelClientBase : IModelClient
         return new StringContent(json, Encoding.UTF8, "application/json");
     }
 
+    protected static Uri BuildEndpoint(string baseUrl, string pathOrAbsoluteUrl)
+    {
+        if (string.IsNullOrWhiteSpace(baseUrl))
+        {
+            throw new InvalidOperationException("Api.baseUrl is empty.");
+        }
+
+        if (Uri.TryCreate(pathOrAbsoluteUrl, UriKind.Absolute, out var absolute))
+        {
+            return absolute;
+        }
+
+        if (!Uri.TryCreate(baseUrl, UriKind.Absolute, out var baseUri))
+        {
+            throw new InvalidOperationException($"Api.baseUrl is not a valid absolute URI: '{baseUrl}'.");
+        }
+
+        if (string.IsNullOrWhiteSpace(pathOrAbsoluteUrl))
+        {
+            return baseUri;
+        }
+
+        if (pathOrAbsoluteUrl.StartsWith("/", StringComparison.Ordinal))
+        {
+            return new Uri($"{baseUri.Scheme}://{baseUri.Authority}{pathOrAbsoluteUrl}");
+        }
+
+        var normalizedBase = baseUri.AbsoluteUri.EndsWith("/", StringComparison.Ordinal)
+            ? baseUri
+            : new Uri(baseUri.AbsoluteUri + "/");
+
+        return new Uri(normalizedBase, pathOrAbsoluteUrl);
+    }
+
     protected void EnsureEndpointAllowed(Uri endpoint)
     {
         if (!Config.Safety.OfflineStrictMode)
@@ -167,6 +202,15 @@ internal abstract class ModelClientBase : IModelClient
 
         return null;
     }
+
+    protected static string BuildHttpError(string providerLabel, HttpStatusCode statusCode, Uri endpoint, string raw)
+    {
+        var hint = statusCode == HttpStatusCode.NotFound
+            ? " Hint: check Api.baseUrl and endpoint path. If baseUrl has a path prefix (e.g. /v1), use relative path without leading slash."
+            : string.Empty;
+
+        return $"{providerLabel} request failed ({(int)statusCode}) endpoint='{endpoint}'.{hint} Response: {raw}";
+    }
 }
 
 internal sealed class OpenAiCompatibleClient : ModelClientBase
@@ -178,7 +222,7 @@ internal sealed class OpenAiCompatibleClient : ModelClientBase
 
     protected override async Task<ModelTurnResult> CompleteCoreAsync(ModelTurnRequest request, CancellationToken ct)
     {
-        var endpoint = new Uri(new Uri(Config.Api.BaseUrl), Config.Api.OpenAiCompatiblePath);
+        var endpoint = BuildEndpoint(Config.Api.BaseUrl, Config.Api.OpenAiCompatiblePath);
         EnsureEndpointAllowed(endpoint);
         var payload = new
         {
@@ -199,7 +243,7 @@ internal sealed class OpenAiCompatibleClient : ModelClientBase
 
         if (!response.IsSuccessStatusCode)
         {
-            throw new InvalidOperationException($"OpenAI-compatible request failed ({(int)response.StatusCode}): {raw}");
+            throw new InvalidOperationException(BuildHttpError("OpenAI-compatible", response.StatusCode, endpoint, raw));
         }
 
         using var doc = JsonDocument.Parse(raw);
@@ -242,7 +286,7 @@ internal sealed class CustomGatewayClient : ModelClientBase
 
     protected override async Task<ModelTurnResult> CompleteCoreAsync(ModelTurnRequest request, CancellationToken ct)
     {
-        var endpoint = new Uri(new Uri(Config.Api.BaseUrl), Config.Api.CustomPath);
+        var endpoint = BuildEndpoint(Config.Api.BaseUrl, Config.Api.CustomPath);
         EnsureEndpointAllowed(endpoint);
         var payload = new
         {
@@ -265,7 +309,7 @@ internal sealed class CustomGatewayClient : ModelClientBase
 
         if (!response.IsSuccessStatusCode)
         {
-            throw new InvalidOperationException($"Custom gateway request failed ({(int)response.StatusCode}): {raw}");
+            throw new InvalidOperationException(BuildHttpError("Custom gateway", response.StatusCode, endpoint, raw));
         }
 
         using var doc = JsonDocument.Parse(raw);

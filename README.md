@@ -85,6 +85,23 @@ Use the corporate template directly:
 HOME=/tmp DOTNET_CLI_HOME=/tmp DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1 DOTNET_CLI_TELEMETRY_OPTOUT=1 dotnet run --project src/Agent.Cli -- run "review repository and propose cleanup" --profile reasoning --config /Users/Shared/Dev/SmartGlucoProject/EvoLoop/config/corporate.offline.config.json
 ```
 
+## Gateway 404 Troubleshooting
+
+If you get `gateway failed (404) {"detail":"not found"}`, this is usually endpoint path mismatch, not model name.
+
+- `max_tokens` is already sent by the client.
+- Check provider/profile mapping:
+  - `provider: "openai"` -> uses `api.openAiCompatiblePath`
+  - `provider: "custom"` -> uses `api.customPath`
+- Path join rule:
+  - If `baseUrl` already contains a path prefix (for example `/v1`), use relative path without leading slash (`chat/completions`).
+  - If path starts with `/`, it is treated from host root.
+
+Example combinations:
+
+- `baseUrl: "https://host"` + `openAiCompatiblePath: "/v1/chat/completions"` -> `https://host/v1/chat/completions`
+- `baseUrl: "https://host/v1"` + `openAiCompatiblePath: "chat/completions"` -> `https://host/v1/chat/completions`
+
 ## Commands
 
 - `/task <text>`

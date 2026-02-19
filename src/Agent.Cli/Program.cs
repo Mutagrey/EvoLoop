@@ -208,7 +208,7 @@ public static class Program
                 var hosts = config.Safety.AllowedNetworkHosts.Count == 0 ? "<none>" : string.Join(", ", config.Safety.AllowedNetworkHosts);
                 renderer.WritePanel(
                     "Config",
-                    $"Path: {configPath}\nProfiles: {models}\nAPI URL: {config.Api.BaseUrl}\nOfflineStrict: {config.Safety.OfflineStrictMode}\nAllowedHosts: {hosts}");
+                    $"Path: {configPath}\nProfiles: {models}\nAPI URL: {config.Api.BaseUrl}\nOpenAI Path: {config.Api.OpenAiCompatiblePath}\nCustom Path: {config.Api.CustomPath}\nOfflineStrict: {config.Safety.OfflineStrictMode}\nAllowedHosts: {hosts}");
                 continue;
             }
 
