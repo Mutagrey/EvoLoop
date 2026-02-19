@@ -1,0 +1,6 @@
+bin/
+obj/
+.evoloop/
+.DS_Store
+*.user
+*.suo
