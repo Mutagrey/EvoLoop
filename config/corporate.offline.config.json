@@ -3,6 +3,7 @@
     "baseUrl": "https://YOUR-GATEWAY-HOST",
     "openAiCompatiblePath": "/v1/chat/completions",
     "customPath": "/api/chat",
+    "apiKey": "",
     "apiKeyEnvVar": "EVOLOOP_API_KEY",
     "timeoutSeconds": 120,
     "headers": {}

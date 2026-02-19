@@ -29,7 +29,7 @@ public static class Program
             if (!HasApiAuthConfigured(config))
             {
                 renderer.WriteWarn(
-                    $"API auth is not configured. Set env var '{config.Api.ApiKeyEnvVar}' or configure auth headers in config.");
+                    $"API auth is not configured. Set env var '{config.Api.ApiKeyEnvVar}', or set api.apiKey, or configure auth headers in config.");
             }
 
             using var modelRouter = new ModelClientRouter(config);
@@ -212,10 +212,13 @@ public static class Program
                 var configPath = AgentConfigLoader.GetDefaultConfigPath();
                 var models = string.Join(", ", config.Models.Keys.OrderBy(x => x));
                 var hosts = config.Safety.AllowedNetworkHosts.Count == 0 ? "<none>" : string.Join(", ", config.Safety.AllowedNetworkHosts);
-                var apiKeyState = string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(config.Api.ApiKeyEnvVar)) ? "missing" : "present";
+                var apiKeyInEnv = !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(config.Api.ApiKeyEnvVar));
+                var apiKeyInConfig = !string.IsNullOrWhiteSpace(config.Api.ApiKey);
+                var apiKeyState = (apiKeyInEnv || apiKeyInConfig) ? "present" : "missing";
+                var apiKeySource = apiKeyInEnv ? "env" : (apiKeyInConfig ? "config" : "none");
                 renderer.WritePanel(
                     "Config",
-                    $"Path: {configPath}\nProfiles: {models}\nAPI URL: {config.Api.BaseUrl}\nOpenAI Path: {config.Api.OpenAiCompatiblePath}\nCustom Path: {config.Api.CustomPath}\nApiKeyEnvVar: {config.Api.ApiKeyEnvVar}\nApiKey: {apiKeyState}\nOfflineStrict: {config.Safety.OfflineStrictMode}\nAllowedHosts: {hosts}");
+                    $"Path: {configPath}\nProfiles: {models}\nAPI URL: {config.Api.BaseUrl}\nOpenAI Path: {config.Api.OpenAiCompatiblePath}\nCustom Path: {config.Api.CustomPath}\nApiKeyEnvVar: {config.Api.ApiKeyEnvVar}\nApiKey: {apiKeyState} ({apiKeySource})\nOfflineStrict: {config.Safety.OfflineStrictMode}\nAllowedHosts: {hosts}");
                 continue;
             }
 
@@ -260,6 +263,11 @@ public static class Program
     private static bool HasApiAuthConfigured(AgentConfig config)
     {
         if (!string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(config.Api.ApiKeyEnvVar)))
+        {
+            return true;
+        }
+
+        if (!string.IsNullOrWhiteSpace(config.Api.ApiKey))
         {
             return true;
         }

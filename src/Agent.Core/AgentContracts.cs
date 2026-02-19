@@ -205,6 +205,7 @@ public sealed class ApiConfig
     public string BaseUrl { get; init; } = "http://localhost:8000";
     public string OpenAiCompatiblePath { get; init; } = "/v1/chat/completions";
     public string CustomPath { get; init; } = "/api/chat";
+    public string ApiKey { get; init; } = string.Empty;
     public string ApiKeyEnvVar { get; init; } = "EVOLOOP_API_KEY";
     public int TimeoutSeconds { get; init; } = 120;
     public Dictionary<string, string> Headers { get; init; } = new(StringComparer.OrdinalIgnoreCase);

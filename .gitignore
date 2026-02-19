@@ -4,3 +4,6 @@ obj/
 .DS_Store
 *.user
 *.suo
+.env
+.env.*
+config/*.local.json

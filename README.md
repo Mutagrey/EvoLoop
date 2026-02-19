@@ -42,7 +42,10 @@ Profiles are mapped as:
 - `fast` -> Qwen
 - `fallback` -> GLM
 
-Set API key in env var named by `api.apiKeyEnvVar` (default `EVOLOOP_API_KEY`).
+Auth options (either one):
+
+- Option A: env var named by `api.apiKeyEnvVar` (default `EVOLOOP_API_KEY`)
+- Option B: put token directly in `api.apiKey` in your config file
 
 Examples:
 
@@ -63,6 +66,18 @@ Windows CMD:
 ```cmd
 set EVOLOOP_API_KEY=your_token_here
 ```
+
+Config file example (without env var):
+
+```json
+{
+  "api": {
+    "apiKey": "your_token_here"
+  }
+}
+```
+
+`.env` file is optional. The agent does not require `.env` unless you personally use a loader/workflow for it.
 
 ## Privacy Defaults
 

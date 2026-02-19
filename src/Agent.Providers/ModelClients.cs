@@ -61,6 +61,11 @@ public sealed class ModelClientRouter : IModelClientRouter, IDisposable
     private static void ConfigureHeaders(HttpClient client, ApiConfig config)
     {
         var apiKey = Environment.GetEnvironmentVariable(config.ApiKeyEnvVar);
+        if (string.IsNullOrWhiteSpace(apiKey))
+        {
+            apiKey = config.ApiKey;
+        }
+
         if (!string.IsNullOrWhiteSpace(apiKey))
         {
             client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
