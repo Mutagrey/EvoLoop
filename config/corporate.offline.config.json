@@ -16,20 +16,20 @@
     "reasoning": {
       "provider": "custom",
       "model": "deepseek",
-      "temperature": 0.15,
-      "maxTokens": 1800
+      "temperature": 0.12,
+      "maxTokens": 2200
     },
     "fast": {
       "provider": "custom",
       "model": "qwen",
-      "temperature": 0.1,
-      "maxTokens": 900
+      "temperature": 0.05,
+      "maxTokens": 1000
     },
     "fallback": {
       "provider": "custom",
       "model": "glm",
-      "temperature": 0.2,
-      "maxTokens": 1200
+      "temperature": 0.18,
+      "maxTokens": 1600
     }
   },
   "workspace": {
@@ -68,8 +68,8 @@
   },
   "runtime": {
     "maxSteps": 30,
-    "maxInvalidModelResponses": 4,
-    "maxConsecutiveFinalWithoutTools": 4,
+    "maxInvalidModelResponses": 6,
+    "maxConsecutiveFinalWithoutTools": 5,
     "invalidResponsesBeforeProfileSwitch": 2,
     "finalWithoutToolsBeforeProfileSwitch": 2,
     "toolTimeoutSeconds": 120,
@@ -79,7 +79,15 @@
     "modelMinTemperature": 0.0,
     "modelMaxTemperature": 0.7,
     "lexicalSearchDefaultMaxResults": 20,
-    "rerankCandidateLimit": 12
+    "rerankCandidateLimit": 12,
+    "memoryEnabled": true,
+    "memoryMaxRuns": 24,
+    "memoryContextMaxChars": 7000,
+    "historyMaxMessages": 80,
+    "historyMaxChars": 120000,
+    "historyKeepTailMessages": 18,
+    "observationMaxChars": 6000,
+    "adaptivePromptingEnabled": true
   },
   "ui": {
     "useColor": true,

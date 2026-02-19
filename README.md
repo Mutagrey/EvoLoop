@@ -12,6 +12,7 @@ Production-oriented autonomous coding agent CLI in pure C# (`.NET 9`) with no th
 - Live step feed (`PLAN` / `RUN` / `RESULT`) and post-run activity panel (`Edited` / `Explored` / `Ran`)
 - Pseudographic console panels with wrapped output and aligned status lines
 - Deterministic recovery layer (auto-repair of common tool args + bootstrap tool calls when model format/behavior degrades)
+- Persistent workspace memory across restarts + automatic context compaction
 - Non-streaming model API support (Qwen, DeepSeek, GLM profiles)
 - Portable/no-admin friendly usage
 - Telemetry hard-disabled for dotnet CLI child processes
@@ -50,14 +51,14 @@ Profiles are mapped as:
 Recommended profile tuning:
 
 - `reasoning` (DeepSeek): best for multi-step code changes, planning, and refactor tasks.
-  - `temperature: 0.15`
-  - `maxTokens: 1800`
+  - `temperature: 0.12`
+  - `maxTokens: 2200`
 - `fast` (Qwen): best for quick checks, small edits, and summaries.
-  - `temperature: 0.10`
-  - `maxTokens: 900`
+  - `temperature: 0.05`
+  - `maxTokens: 1000`
 - `fallback` (GLM): backup profile with balanced behavior.
-  - `temperature: 0.20`
-  - `maxTokens: 1200`
+  - `temperature: 0.18`
+  - `maxTokens: 1600`
 
 Runtime safety boundaries (recommended):
 
@@ -65,8 +66,8 @@ Runtime safety boundaries (recommended):
 - `runtime.modelMaxOutputTokens: 4096`
 - `runtime.modelMinTemperature: 0.0`
 - `runtime.modelMaxTemperature: 0.7`
-- `runtime.maxInvalidModelResponses: 4`
-- `runtime.maxConsecutiveFinalWithoutTools: 4`
+- `runtime.maxInvalidModelResponses: 6`
+- `runtime.maxConsecutiveFinalWithoutTools: 5`
 - `runtime.invalidResponsesBeforeProfileSwitch: 2`
 - `runtime.finalWithoutToolsBeforeProfileSwitch: 2`
 
@@ -76,6 +77,24 @@ Model output reliability controls:
 - `api.responseFormatFallbackWithoutJson: true`
 - `api.systemPromptMode: "user"` (`system` | `user` | `both`)
 - `api.systemPromptFallbackToUserMessage: true`
+- `runtime.adaptivePromptingEnabled: true` (dynamic format/strategy tightening after model failures)
+
+Persistent memory and automatic context compression:
+
+- `runtime.memoryEnabled: true`
+- `runtime.memoryMaxRuns: 24`
+- `runtime.memoryContextMaxChars: 7000`
+- `runtime.historyMaxMessages: 80`
+- `runtime.historyMaxChars: 120000`
+- `runtime.historyKeepTailMessages: 18`
+- `runtime.observationMaxChars: 6000`
+
+How it works:
+
+- memory is stored locally in `.evoloop/storage/memory-runs.jsonl` (no remote telemetry)
+- on startup, agent injects relevant snippets from previous runs into model context
+- when context grows too large, old turns are compacted into structured summary automatically
+- adaptive prompt layer tightens output contract after format failures (self-correction loop)
 
 The agent will request JSON-formatted output from the model and fallback automatically if gateway does not support `response_format`.
 Default mode is `user` because many gateways ignore/deprioritize `system`. If gateway supports strict system role well, you can switch to `system` or `both`.
@@ -215,6 +234,7 @@ Example combinations:
 - `/status`
 - `/tools`
 - `/history`
+- `/memory`
 - `/config`
 - `/approve` and `/deny` (informational; approvals are inline)
 - `/exit`
@@ -222,6 +242,7 @@ Example combinations:
 During run, CLI now shows:
 
 - `STEP`: current loop step
+- `MEMORY`: memory load/update and context compaction notifications
 - `PLAN`: concise next action in human language (no raw JSON/args dump)
 - `RUN`: exact action being executed
 - `RESULT`: tool outcome in human-readable form
@@ -240,11 +261,13 @@ Reliability hardening now includes:
 
 - deterministic bootstrap tool call when model returns `final` too early for action tasks
 - parser support for additional tool-call shapes (`tool_calls`, `function_call`, `name+arguments`, nested response objects)
-- automatic safe argument repair for common fields (`path`, `query`, `pathspec`, `ref`) based on task text and recent tool observations
+- automatic safe argument repair for common fields (`path`, `query`, `pathspec`, `ref`, `command`, `message`) based on task text and recent tool observations
+- deterministic fallback actions when required args are still missing (for example: switch to `fs_list` / `search_lexical` to discover paths first)
+- plain-text final fallback for non-tool tasks (prevents wasting useful model answers on strict JSON mismatch)
 
 The run now stops with a clear message once retry limits are hit (instead of looping silently).
 Unknown tool loops are treated as invalid model decisions and are now auto-stopped/profile-switched by the same guardrails.
-Tool argument parsing is tolerant to common variants (`filePath`, nested `arguments`, JSON in `input`) to reduce `missing required argument` failures.
+Tool argument parsing is tolerant to common variants (`filePath`, nested `arguments`, plain-text `input`, bullet/YAML-style fields) to reduce `missing required argument` failures.
 
 ## Tests
 

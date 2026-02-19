@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Reflection;
 using System.Runtime.Loader;
 using Agent.Core;
+using Agent.Storage;
 using Agent.Tools;
 
 AssemblyLoadContext.Default.Resolving += ResolveFromOutput;
@@ -20,6 +21,8 @@ var tests = new List<(string Name, Func<Task> Run)>
     ("ReAct loop retries on non-json model output", TestLoopRetriesOnNonJsonOutput),
     ("ToolArgumentReader maps path aliases and nested input", TestToolArgumentReaderAliasAndNested),
     ("ReAct loop auto-repairs missing path from task context", TestLoopAutoRepairsMissingPathFromTask),
+    ("ReAct loop falls back to fs_list when path is missing and unrecoverable", TestLoopFallsBackToFsListForMissingPath),
+    ("ReAct loop repairs path from bullet-style output", TestLoopRepairsPathFromBulletStyleOutput),
     ("ReAct loop rejects tool call with missing required args", TestLoopRejectsMissingRequiredArgs),
     ("ReAct loop recovers tool call from plain text action output", TestLoopRecoversToolCallFromPlainText),
     ("ReAct loop parses tool_calls function variant", TestLoopParsesToolCallsFunctionVariant),
@@ -28,8 +31,11 @@ var tests = new List<(string Name, Func<Task> Run)>
     ("ReAct loop stops after repeated invalid output", TestLoopStopsAfterRepeatedInvalidOutput),
     ("ReAct loop stops after repeated unknown tool output", TestLoopStopsAfterRepeatedUnknownToolOutput),
     ("ReAct loop handles final response", TestLoopFinalResponse),
+    ("ReAct loop accepts plain final text for non-tool task", TestLoopAcceptsPlainFinalTextForNonToolTask),
     ("ReAct loop executes tool then final", TestLoopToolThenFinal),
-    ("Fallback lexical search returns results", TestFallbackLexicalSearch)
+    ("Fallback lexical search returns results", TestFallbackLexicalSearch),
+    ("ReAct loop injects workspace memory into model context", TestLoopInjectsWorkspaceMemory),
+    ("Workspace memory store persists and loads context", TestWorkspaceMemoryStorePersistsAndLoadsContext)
 };
 
 var failed = 0;
@@ -284,6 +290,27 @@ static async Task TestLoopFinalResponse()
     Assert(result.FinalMessage.Contains("done", StringComparison.OrdinalIgnoreCase), "Expected final message to contain done.");
 }
 
+static async Task TestLoopAcceptsPlainFinalTextForNonToolTask()
+{
+    var config = new AgentConfig();
+    var responses = new Queue<ModelTurnResult>();
+    responses.Enqueue(new ModelTurnResult("Here is the concise answer to your question.", "fake"));
+
+    var router = new FakeModelRouter(new FakeModelClient(responses), "fake");
+    var loop = new ReActAgentLoop(
+        router,
+        Array.Empty<ITool>(),
+        new DefaultPolicyEngine(config),
+        new AutoApproveService(true),
+        new InMemoryEventStore(),
+        new DefaultToolContextFactory(config, new NullSearchService()),
+        config);
+
+    var result = await loop.RunAsync(new AgentRunRequest("what is the purpose of this tool?", Path.GetTempPath(), "reasoning", 4), CancellationToken.None);
+    Assert(result.Success, "Expected plain text to be accepted as final for non-tool task.");
+    Assert(result.FinalMessage.Contains("concise answer", StringComparison.OrdinalIgnoreCase), "Expected recovered plain final message.");
+}
+
 static async Task TestLoopRetriesOnNonJsonOutput()
 {
     var config = new AgentConfig();
@@ -322,6 +349,18 @@ static Task TestToolArgumentReaderAliasAndNested()
     var inputPath = ToolArgumentReader.GetString(inputDoc.RootElement, "path");
     Assert(inputPath == "src/Nested.cs", "Expected JSON string input to be parsed for path.");
 
+    using var commandDoc = JsonDocument.Parse("{\"input\":\"command: dotnet test\"}");
+    var command = ToolArgumentReader.GetString(commandDoc.RootElement, "command");
+    Assert(command == "dotnet test", "Expected command to be recovered from input text.");
+
+    using var queryDoc = JsonDocument.Parse("{\"input\":\"search for \\\"ReActAgentLoop\\\"\"}");
+    var query = ToolArgumentReader.GetString(queryDoc.RootElement, "query");
+    Assert(query == "ReActAgentLoop", "Expected query to be recovered from input text.");
+
+    using var commitDoc = JsonDocument.Parse("{\"input\":\"commit message: \\\"feat: stabilize parser\\\"\"}");
+    var commitMessage = ToolArgumentReader.GetString(commitDoc.RootElement, "message");
+    Assert(commitMessage == "feat: stabilize parser", "Expected commit message to be recovered from input text.");
+
     return Task.CompletedTask;
 }
 
@@ -352,6 +391,82 @@ static async Task TestLoopAutoRepairsMissingPathFromTask()
         var result = await loop.RunAsync(new AgentRunRequest("read README.md and summarize", temp, "reasoning", 6), CancellationToken.None);
         Assert(result.Success, "Expected success after auto-repairing missing path.");
         Assert(result.StepTrace.Count == 1, "Expected one fs_read step after auto-repair.");
+        Assert(result.StepTrace[0].ToolName.Equals("fs_read", StringComparison.OrdinalIgnoreCase), "Expected fs_read tool execution.");
+    }
+    finally
+    {
+        if (Directory.Exists(temp))
+        {
+            Directory.Delete(temp, true);
+        }
+    }
+}
+
+static async Task TestLoopFallsBackToFsListForMissingPath()
+{
+    var temp = Path.Combine(Path.GetTempPath(), "agent-tests-fallback-path-" + Guid.NewGuid().ToString("n"));
+    Directory.CreateDirectory(temp);
+
+    try
+    {
+        await File.WriteAllTextAsync(Path.Combine(temp, "README.md"), "hello");
+
+        var config = new AgentConfig();
+        var responses = new Queue<ModelTurnResult>();
+        responses.Enqueue(new ModelTurnResult("{\"type\":\"tool\",\"tool\":\"fs_read\",\"reason\":\"open target file\",\"arguments\":{}}", "fake"));
+        responses.Enqueue(new ModelTurnResult("{\"type\":\"final\",\"message\":\"done\"}", "fake"));
+
+        var router = new FakeModelRouter(new FakeModelClient(responses), "fake");
+        var loop = new ReActAgentLoop(
+            router,
+            new ITool[] { new FsReadTool(), new FsListTool() },
+            new DefaultPolicyEngine(config),
+            new AutoApproveService(true),
+            new InMemoryEventStore(),
+            new DefaultToolContextFactory(config, new NullSearchService()),
+            config);
+
+        var result = await loop.RunAsync(new AgentRunRequest("inspect repository and continue", temp, "reasoning", 6), CancellationToken.None);
+        Assert(result.Success, "Expected success after deterministic fs_list fallback for missing path.");
+        Assert(result.StepTrace.Count == 1, "Expected exactly one fallback tool step.");
+        Assert(result.StepTrace[0].ToolName.Equals("fs_list", StringComparison.OrdinalIgnoreCase), "Expected fs_list fallback execution.");
+    }
+    finally
+    {
+        if (Directory.Exists(temp))
+        {
+            Directory.Delete(temp, true);
+        }
+    }
+}
+
+static async Task TestLoopRepairsPathFromBulletStyleOutput()
+{
+    var temp = Path.Combine(Path.GetTempPath(), "agent-tests-bullet-path-" + Guid.NewGuid().ToString("n"));
+    Directory.CreateDirectory(temp);
+
+    try
+    {
+        await File.WriteAllTextAsync(Path.Combine(temp, "README.md"), "hello");
+
+        var config = new AgentConfig();
+        var responses = new Queue<ModelTurnResult>();
+        responses.Enqueue(new ModelTurnResult("tool: fs_read\n- path: README.md\nreason: inspect readme", "fake"));
+        responses.Enqueue(new ModelTurnResult("{\"type\":\"final\",\"message\":\"done\"}", "fake"));
+
+        var router = new FakeModelRouter(new FakeModelClient(responses), "fake");
+        var loop = new ReActAgentLoop(
+            router,
+            new ITool[] { new FsReadTool() },
+            new DefaultPolicyEngine(config),
+            new AutoApproveService(true),
+            new InMemoryEventStore(),
+            new DefaultToolContextFactory(config, new NullSearchService()),
+            config);
+
+        var result = await loop.RunAsync(new AgentRunRequest("read README.md quickly", temp, "reasoning", 6), CancellationToken.None);
+        Assert(result.Success, "Expected success when bullet-style path is recovered.");
+        Assert(result.StepTrace.Count == 1, "Expected one fs_read step after recovery.");
         Assert(result.StepTrace[0].ToolName.Equals("fs_read", StringComparison.OrdinalIgnoreCase), "Expected fs_read tool execution.");
     }
     finally
@@ -659,6 +774,41 @@ static async Task TestLoopToolThenFinal()
     Assert(result.StepTrace.Count == 1, "Expected one tool step in trace.");
 }
 
+static async Task TestLoopInjectsWorkspaceMemory()
+{
+    var config = new AgentConfig
+    {
+        Runtime = new RuntimeConfig
+        {
+            MemoryEnabled = true
+        }
+    };
+
+    var responses = new Queue<ModelTurnResult>();
+    responses.Enqueue(new ModelTurnResult("{\"type\":\"final\",\"message\":\"done\"}", "fake"));
+
+    var client = new FakeModelClient(responses);
+    var router = new FakeModelRouter(client, "fake");
+    var memoryStore = new FakeMemoryStore(new WorkspaceMemoryContext("WORKSPACE MEMORY (test): previous fix in src/App.cs", 1));
+
+    var loop = new ReActAgentLoop(
+        router,
+        Array.Empty<ITool>(),
+        new DefaultPolicyEngine(config),
+        new AutoApproveService(true),
+        new InMemoryEventStore(),
+        new DefaultToolContextFactory(config, new NullSearchService()),
+        config,
+        memoryStore);
+
+    var result = await loop.RunAsync(new AgentRunRequest("answer question", Path.GetTempPath(), "reasoning", 4), CancellationToken.None);
+    Assert(result.Success, "Expected successful run.");
+    Assert(client.SeenRequests.Count > 0, "Expected at least one model request.");
+    Assert(client.SeenRequests[0].Messages.Any(m => m.Content.Contains("WORKSPACE MEMORY", StringComparison.OrdinalIgnoreCase)),
+        "Expected memory context to be injected into first model request.");
+    Assert(memoryStore.Saved.Count == 1, "Expected memory store to receive saved run.");
+}
+
 static async Task TestFallbackLexicalSearch()
 {
     var temp = Path.Combine(Path.GetTempPath(), "agent-tests-" + Guid.NewGuid().ToString("n"));
@@ -684,6 +834,53 @@ static async Task TestFallbackLexicalSearch()
     }
 }
 
+static async Task TestWorkspaceMemoryStorePersistsAndLoadsContext()
+{
+    var temp = Path.Combine(Path.GetTempPath(), "agent-tests-memory-" + Guid.NewGuid().ToString("n"));
+    Directory.CreateDirectory(temp);
+
+    try
+    {
+        var config = new AgentConfig();
+        var memory = new WorkspaceMemoryStore(temp, config);
+
+        var steps = new List<SessionStep>
+        {
+            new(
+                SessionId: "s1",
+                StepNumber: 1,
+                Action: "tool",
+                ToolName: "fs_write",
+                Reasoning: "create file",
+                Success: true,
+                Output: "Wrote file: src/App.cs",
+                TimestampUtc: DateTimeOffset.UtcNow,
+                DurationMs: 10,
+                Error: null)
+        };
+
+        await memory.SaveRunAsync(new WorkspaceMemoryRecord(
+            WorkspaceRoot: temp,
+            SessionId: "s1",
+            Task: "create app file",
+            Success: true,
+            FinalMessage: "done",
+            Steps: steps,
+            CompletedAtUtc: DateTimeOffset.UtcNow), CancellationToken.None);
+
+        var loaded = await memory.LoadContextAsync(temp, "edit app file", CancellationToken.None);
+        Assert(loaded.EntriesUsed > 0, "Expected memory context entries.");
+        Assert(loaded.Content.Contains("create app file", StringComparison.OrdinalIgnoreCase), "Expected memory content to include prior task.");
+    }
+    finally
+    {
+        if (Directory.Exists(temp))
+        {
+            Directory.Delete(temp, true);
+        }
+    }
+}
+
 static void Assert(bool condition, string message)
 {
     if (!condition)
@@ -695,6 +892,7 @@ static void Assert(bool condition, string message)
 internal sealed class FakeModelClient : IModelClient
 {
     private readonly Queue<ModelTurnResult> _responses;
+    public List<ModelTurnRequest> SeenRequests { get; } = new();
 
     public FakeModelClient(Queue<ModelTurnResult> responses)
     {
@@ -705,6 +903,7 @@ internal sealed class FakeModelClient : IModelClient
 
     public Task<ModelTurnResult> CompleteAsync(ModelTurnRequest request, CancellationToken ct)
     {
+        SeenRequests.Add(request);
         if (_responses.Count == 0)
         {
             return Task.FromResult(new ModelTurnResult("{\"type\":\"final\",\"message\":\"empty\"}", "fake"));
@@ -788,6 +987,26 @@ internal sealed class NullSearchService : ISearchService
 
     public Task<IReadOnlyList<SearchHit>> RerankAsync(string task, IReadOnlyList<SearchHit> candidates, CancellationToken ct)
         => Task.FromResult(candidates);
+}
+
+internal sealed class FakeMemoryStore : IWorkspaceMemoryStore
+{
+    private readonly WorkspaceMemoryContext _context;
+    public List<WorkspaceMemoryRecord> Saved { get; } = new();
+
+    public FakeMemoryStore(WorkspaceMemoryContext context)
+    {
+        _context = context;
+    }
+
+    public Task<WorkspaceMemoryContext> LoadContextAsync(string workspaceRoot, string task, CancellationToken ct)
+        => Task.FromResult(_context);
+
+    public Task SaveRunAsync(WorkspaceMemoryRecord record, CancellationToken ct)
+    {
+        Saved.Add(record);
+        return Task.CompletedTask;
+    }
 }
 
 internal sealed class EchoTool : ITool

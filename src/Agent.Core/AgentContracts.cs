@@ -48,6 +48,12 @@ public interface IEventStore
     Task CompleteSessionAsync(string sessionId, string finalStatus, CancellationToken ct);
 }
 
+public interface IWorkspaceMemoryStore
+{
+    Task<WorkspaceMemoryContext> LoadContextAsync(string workspaceRoot, string task, CancellationToken ct);
+    Task SaveRunAsync(WorkspaceMemoryRecord record, CancellationToken ct);
+}
+
 public interface ISearchService
 {
     Task<IReadOnlyList<SearchHit>> LexicalAsync(SearchQuery query, CancellationToken ct);
@@ -132,6 +138,8 @@ public sealed record AgentRunEvent(AgentRunEventType Type, string Message, int? 
 public enum AgentRunEventType
 {
     SessionStarted,
+    MemoryLoaded,
+    ContextCompacted,
     ModelCallStarted,
     ModelCallCompleted,
     ModelProfileSwitched,
@@ -145,6 +153,7 @@ public enum AgentRunEventType
     ApprovalRejected,
     ToolExecutionStarted,
     ToolExecutionCompleted,
+    MemoryUpdated,
     SessionCompleted,
     Error
 }
@@ -162,6 +171,20 @@ public sealed record SessionStep(
     DateTimeOffset TimestampUtc,
     long DurationMs,
     string? Error = null);
+
+public sealed record WorkspaceMemoryContext(string Content, int EntriesUsed)
+{
+    public static readonly WorkspaceMemoryContext Empty = new(string.Empty, 0);
+}
+
+public sealed record WorkspaceMemoryRecord(
+    string WorkspaceRoot,
+    string SessionId,
+    string Task,
+    bool Success,
+    string FinalMessage,
+    IReadOnlyList<SessionStep> Steps,
+    DateTimeOffset CompletedAtUtc);
 
 public sealed record SearchQuery(
     string WorkspaceRoot,
@@ -188,14 +211,27 @@ public sealed class NullObserver : IAgentRunObserver
     public Task OnEventAsync(AgentRunEvent evt, CancellationToken ct) => Task.CompletedTask;
 }
 
+public sealed class NullWorkspaceMemoryStore : IWorkspaceMemoryStore
+{
+    public static readonly NullWorkspaceMemoryStore Instance = new();
+
+    private NullWorkspaceMemoryStore() { }
+
+    public Task<WorkspaceMemoryContext> LoadContextAsync(string workspaceRoot, string task, CancellationToken ct)
+        => Task.FromResult(WorkspaceMemoryContext.Empty);
+
+    public Task SaveRunAsync(WorkspaceMemoryRecord record, CancellationToken ct)
+        => Task.CompletedTask;
+}
+
 public sealed class AgentConfig
 {
     public ApiConfig Api { get; init; } = new();
     public Dictionary<string, ModelProfileConfig> Models { get; init; } = new(StringComparer.OrdinalIgnoreCase)
     {
-        ["reasoning"] = new() { Provider = "custom", Model = "deepseek", Temperature = 0.15, MaxTokens = 1800 },
-        ["fast"] = new() { Provider = "custom", Model = "qwen", Temperature = 0.10, MaxTokens = 900 },
-        ["fallback"] = new() { Provider = "custom", Model = "glm", Temperature = 0.20, MaxTokens = 1200 }
+        ["reasoning"] = new() { Provider = "custom", Model = "deepseek", Temperature = 0.12, MaxTokens = 2200 },
+        ["fast"] = new() { Provider = "custom", Model = "qwen", Temperature = 0.05, MaxTokens = 1000 },
+        ["fallback"] = new() { Provider = "custom", Model = "glm", Temperature = 0.18, MaxTokens = 1600 }
     };
 
     public WorkspaceConfig Workspace { get; init; } = new();
@@ -263,8 +299,8 @@ public sealed class SafetyConfig
 public sealed class RuntimeConfig
 {
     public int MaxSteps { get; init; } = 30;
-    public int MaxInvalidModelResponses { get; init; } = 4;
-    public int MaxConsecutiveFinalWithoutTools { get; init; } = 4;
+    public int MaxInvalidModelResponses { get; init; } = 6;
+    public int MaxConsecutiveFinalWithoutTools { get; init; } = 5;
     public int InvalidResponsesBeforeProfileSwitch { get; init; } = 2;
     public int FinalWithoutToolsBeforeProfileSwitch { get; init; } = 2;
     public int ToolTimeoutSeconds { get; init; } = 120;
@@ -275,6 +311,14 @@ public sealed class RuntimeConfig
     public double ModelMaxTemperature { get; init; } = 0.7;
     public int LexicalSearchDefaultMaxResults { get; init; } = 20;
     public int RerankCandidateLimit { get; init; } = 12;
+    public bool MemoryEnabled { get; init; } = true;
+    public int MemoryMaxRuns { get; init; } = 24;
+    public int MemoryContextMaxChars { get; init; } = 7000;
+    public int HistoryMaxMessages { get; init; } = 80;
+    public int HistoryMaxChars { get; init; } = 120000;
+    public int HistoryKeepTailMessages { get; init; } = 18;
+    public int ObservationMaxChars { get; init; } = 6000;
+    public bool AdaptivePromptingEnabled { get; init; } = true;
 }
 
 public sealed class UiConfig

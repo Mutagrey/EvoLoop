@@ -40,7 +40,10 @@ public static class Program
             var policy = new DefaultPolicyEngine(config);
             var approval = new ConsoleApprovalService(renderer);
             var eventStore = new HybridEventStore(workspace);
-            var loop = new ReActAgentLoop(modelRouter, tools, policy, approval, eventStore, contextFactory, config);
+            var memoryStore = config.Runtime.MemoryEnabled
+                ? new WorkspaceMemoryStore(workspace, config)
+                : NullWorkspaceMemoryStore.Instance;
+            var loop = new ReActAgentLoop(modelRouter, tools, policy, approval, eventStore, contextFactory, config, memoryStore);
 
             if (command.Mode == CliMode.Run)
             {
@@ -54,7 +57,7 @@ public static class Program
                 return result.Success ? 0 : 1;
             }
 
-            await RunReplAsync(loop, tools, renderer, config, workspace, command.Profile);
+            await RunReplAsync(loop, tools, renderer, config, workspace, command.Profile, memoryStore);
             return 0;
         }
         catch (Exception ex)
@@ -121,12 +124,13 @@ public static class Program
         AnsiRenderer renderer,
         AgentConfig config,
         string workspace,
-        string profile)
+        string profile,
+        IWorkspaceMemoryStore memoryStore)
     {
         renderer.WriteHeader("EvoLoop Agent CLI");
         renderer.WritePanel(
             "Session",
-            $"Workspace: {workspace}\nProfile: {profile}\nCommands: /task, /status, /tools, /history, /config, /exit");
+            $"Workspace: {workspace}\nProfile: {profile}\nCommands: /task, /status, /tools, /history, /memory, /config, /exit");
 
         AgentRunResult? lastRun = null;
 
@@ -219,7 +223,28 @@ public static class Program
                 var apiKeySource = apiKeyInEnv ? "env" : (apiKeyInConfig ? "config" : "none");
                 renderer.WritePanel(
                     "Config",
-                    $"Path: {configPath}\nProfiles: {models}\nAPI URL: {config.Api.BaseUrl}\nOpenAI Path: {config.Api.OpenAiCompatiblePath}\nCustom Path: {config.Api.CustomPath}\nSystemPromptMode: {config.Api.SystemPromptMode}\nSystemPromptFallbackToUserMessage: {config.Api.SystemPromptFallbackToUserMessage}\nApiKeyEnvVar: {config.Api.ApiKeyEnvVar}\nApiKey: {apiKeyState} ({apiKeySource})\nOfflineStrict: {config.Safety.OfflineStrictMode}\nAllowedHosts: {hosts}");
+                    $"Path: {configPath}\nProfiles: {models}\nAPI URL: {config.Api.BaseUrl}\nOpenAI Path: {config.Api.OpenAiCompatiblePath}\nCustom Path: {config.Api.CustomPath}\nSystemPromptMode: {config.Api.SystemPromptMode}\nSystemPromptFallbackToUserMessage: {config.Api.SystemPromptFallbackToUserMessage}\nApiKeyEnvVar: {config.Api.ApiKeyEnvVar}\nApiKey: {apiKeyState} ({apiKeySource})\nOfflineStrict: {config.Safety.OfflineStrictMode}\nAllowedHosts: {hosts}\nMemoryEnabled: {config.Runtime.MemoryEnabled}\nAdaptivePrompting: {config.Runtime.AdaptivePromptingEnabled}");
+                continue;
+            }
+
+            if (input.Equals("/memory", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!config.Runtime.MemoryEnabled)
+                {
+                    renderer.WriteInfo("Memory is disabled in runtime config.");
+                    continue;
+                }
+
+                var memory = await memoryStore.LoadContextAsync(workspace, "workspace overview", CancellationToken.None);
+                if (string.IsNullOrWhiteSpace(memory.Content))
+                {
+                    renderer.WriteInfo("No workspace memory available yet.");
+                }
+                else
+                {
+                    renderer.WritePanel("Workspace Memory", memory.Content);
+                }
+
                 continue;
             }
 
@@ -436,6 +461,13 @@ internal sealed class SpinnerObserver : IAgentRunObserver, IDisposable
             case AgentRunEventType.SessionStarted:
                 _renderer.WriteStatus("SESSION", evt.Message, ConsoleColor.Cyan);
                 break;
+            case AgentRunEventType.MemoryLoaded:
+                _renderer.WriteStatus("MEMORY", evt.Message, ConsoleColor.DarkCyan);
+                break;
+            case AgentRunEventType.ContextCompacted:
+                AnnounceStepIfNeeded(evt.Step);
+                _renderer.WriteStatus("MEMORY", evt.Message, ConsoleColor.DarkCyan, depth: 1);
+                break;
             case AgentRunEventType.ModelCallStarted:
                 StartSpinner(evt.Step, evt.Message);
                 break;
@@ -492,6 +524,9 @@ internal sealed class SpinnerObserver : IAgentRunObserver, IDisposable
                     depth: 2,
                     isLast: true);
                 TrackActivity(evt.Message);
+                break;
+            case AgentRunEventType.MemoryUpdated:
+                _renderer.WriteStatus("MEMORY", evt.Message, ConsoleColor.DarkCyan);
                 break;
             case AgentRunEventType.SessionCompleted:
                 StopSpinner();
