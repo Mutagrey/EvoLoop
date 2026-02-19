@@ -23,7 +23,7 @@ Production-oriented autonomous coding agent CLI in pure C# (`.NET 6`) with no th
 
 ## Requirements
 
-- .NET SDK 6.x
+- .NET SDK 9.x
 - `git` on PATH
 - Optional: `rg` for fast lexical search
 - Optional: `sqlite3` for event storage backend
