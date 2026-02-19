@@ -44,6 +44,26 @@ Profiles are mapped as:
 
 Set API key in env var named by `api.apiKeyEnvVar` (default `EVOLOOP_API_KEY`).
 
+Examples:
+
+macOS/Linux (bash/zsh):
+
+```bash
+export EVOLOOP_API_KEY="your_token_here"
+```
+
+Windows PowerShell:
+
+```powershell
+$env:EVOLOOP_API_KEY="your_token_here"
+```
+
+Windows CMD:
+
+```cmd
+set EVOLOOP_API_KEY=your_token_here
+```
+
 ## Privacy Defaults
 
 - `DOTNET_CLI_TELEMETRY_OPTOUT=1`
@@ -62,6 +82,29 @@ HOME=/tmp DOTNET_CLI_HOME=/tmp DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1 DOTNET_CLI_TE
 
 ```bash
 HOME=/tmp DOTNET_CLI_HOME=/tmp DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1 DOTNET_CLI_TELEMETRY_OPTOUT=1 dotnet run --project src/Agent.Cli
+```
+
+## VS Code Terminal Integration
+
+This repo includes ready-to-use tasks at:
+
+- `/Users/Shared/Dev/SmartGlucoProject/EvoLoop/.vscode/tasks.json`
+
+How to use:
+
+1. Open project in VS Code.
+2. Open `Terminal` -> `Run Task...`.
+3. Run one of:
+   - `Agent: REPL`
+   - `Agent: Run Task`
+   - `Agent: Run Task (Offline Strict)`
+   - `Agent: Build`
+   - `Agent: Tests`
+
+For auth, set token in your terminal before running tasks:
+
+```bash
+export EVOLOOP_API_KEY="your_token_here"
 ```
 
 ## Run (One-shot)

@@ -1,0 +1,112 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Agent: REPL",
+      "type": "process",
+      "command": "${workspaceFolder}/scripts/run-agent.sh",
+      "windows": {
+        "command": "${workspaceFolder}\\scripts\\run-agent.cmd"
+      },
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Agent: Run Task",
+      "type": "process",
+      "command": "${workspaceFolder}/scripts/run-agent.sh",
+      "windows": {
+        "command": "${workspaceFolder}\\scripts\\run-agent.cmd"
+      },
+      "args": [
+        "run",
+        "${input:agentTask}",
+        "--profile",
+        "${input:agentProfile}"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Agent: Run Task (Offline Strict)",
+      "type": "process",
+      "command": "${workspaceFolder}/scripts/run-agent.sh",
+      "windows": {
+        "command": "${workspaceFolder}\\scripts\\run-agent.cmd"
+      },
+      "args": [
+        "run",
+        "${input:agentTask}",
+        "--profile",
+        "${input:agentProfile}",
+        "--offline-strict",
+        "--config",
+        "${workspaceFolder}/config/corporate.offline.config.json"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Agent: Build",
+      "type": "process",
+      "command": "dotnet",
+      "args": [
+        "build",
+        "${workspaceFolder}/EvoLoopAgent.sln"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": {
+          "DOTNET_SKIP_FIRST_TIME_EXPERIENCE": "1",
+          "DOTNET_CLI_TELEMETRY_OPTOUT": "1",
+          "DOTNET_NOLOGO": "1"
+        }
+      },
+      "problemMatcher": "$msCompile"
+    },
+    {
+      "label": "Agent: Tests",
+      "type": "process",
+      "command": "dotnet",
+      "args": [
+        "run",
+        "--project",
+        "${workspaceFolder}/tests/Agent.Tests/Agent.Tests.csproj"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": {
+          "DOTNET_SKIP_FIRST_TIME_EXPERIENCE": "1",
+          "DOTNET_CLI_TELEMETRY_OPTOUT": "1",
+          "DOTNET_NOLOGO": "1"
+        }
+      },
+      "problemMatcher": []
+    }
+  ],
+  "inputs": [
+    {
+      "id": "agentTask",
+      "type": "promptString",
+      "description": "Task for the agent (one-shot mode)",
+      "default": "Inspect workspace and summarize current project status."
+    },
+    {
+      "id": "agentProfile",
+      "type": "pickString",
+      "description": "Model profile",
+      "options": [
+        "reasoning",
+        "fast",
+        "fallback"
+      ],
+      "default": "reasoning"
+    }
+  ]
+}

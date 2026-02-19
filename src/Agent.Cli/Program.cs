@@ -26,6 +26,12 @@ public static class Program
                 renderer.WriteWarn("Offline strict mode is ON. Network shell commands are blocked except approved gateway hosts.");
             }
 
+            if (!HasApiAuthConfigured(config))
+            {
+                renderer.WriteWarn(
+                    $"API auth is not configured. Set env var '{config.Api.ApiKeyEnvVar}' or configure auth headers in config.");
+            }
+
             using var modelRouter = new ModelClientRouter(config);
             var searchService = new HybridSearchService(modelRouter, config, workspace);
             var contextFactory = new DefaultToolContextFactory(config, searchService);
@@ -206,9 +212,10 @@ public static class Program
                 var configPath = AgentConfigLoader.GetDefaultConfigPath();
                 var models = string.Join(", ", config.Models.Keys.OrderBy(x => x));
                 var hosts = config.Safety.AllowedNetworkHosts.Count == 0 ? "<none>" : string.Join(", ", config.Safety.AllowedNetworkHosts);
+                var apiKeyState = string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(config.Api.ApiKeyEnvVar)) ? "missing" : "present";
                 renderer.WritePanel(
                     "Config",
-                    $"Path: {configPath}\nProfiles: {models}\nAPI URL: {config.Api.BaseUrl}\nOpenAI Path: {config.Api.OpenAiCompatiblePath}\nCustom Path: {config.Api.CustomPath}\nOfflineStrict: {config.Safety.OfflineStrictMode}\nAllowedHosts: {hosts}");
+                    $"Path: {configPath}\nProfiles: {models}\nAPI URL: {config.Api.BaseUrl}\nOpenAI Path: {config.Api.OpenAiCompatiblePath}\nCustom Path: {config.Api.CustomPath}\nApiKeyEnvVar: {config.Api.ApiKeyEnvVar}\nApiKey: {apiKeyState}\nOfflineStrict: {config.Safety.OfflineStrictMode}\nAllowedHosts: {hosts}");
                 continue;
             }
 
@@ -248,6 +255,28 @@ public static class Program
             $"Session: {result.SessionId}\nSteps: {result.Steps}\n\n{result.FinalMessage}");
 
         return result;
+    }
+    
+    private static bool HasApiAuthConfigured(AgentConfig config)
+    {
+        if (!string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(config.Api.ApiKeyEnvVar)))
+        {
+            return true;
+        }
+
+        if (config.Api.Headers.ContainsKey("Authorization"))
+        {
+            return true;
+        }
+
+        if (config.Api.Headers.Keys.Any(k =>
+                k.Equals("X-API-Key", StringComparison.OrdinalIgnoreCase) ||
+                k.Equals("Api-Key", StringComparison.OrdinalIgnoreCase)))
+        {
+            return true;
+        }
+
+        return false;
     }
 }
 
