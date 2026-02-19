@@ -1,5 +1,3 @@
-using System.Text.Json;
-
 namespace Agent.Core;
 
 public sealed class DefaultPolicyEngine : IPolicyEngine
@@ -42,7 +40,7 @@ public sealed class DefaultPolicyEngine : IPolicyEngine
 
         if (call.Name.Equals("exec_shell", StringComparison.OrdinalIgnoreCase))
         {
-            var command = ExtractCommand(call.Arguments);
+            var command = ToolArgumentReader.GetString(call.Arguments, "command");
             if (string.IsNullOrWhiteSpace(command))
             {
                 return new PolicyDecision(PolicyDecisionKind.Deny, "Shell command is empty.");
@@ -81,12 +79,12 @@ public sealed class DefaultPolicyEngine : IPolicyEngine
     {
         var paths = new List<string?>(2)
         {
-            ExtractStringArg(call.Arguments, "path")
+            ToolArgumentReader.GetString(call.Arguments, "path")
         };
 
         if (call.Name.Equals("exec_shell", StringComparison.OrdinalIgnoreCase))
         {
-            paths.Add(ExtractStringArg(call.Arguments, "cwd"));
+            paths.Add(ToolArgumentReader.GetString(call.Arguments, "cwd"));
         }
 
         foreach (var rawPath in paths)
@@ -106,30 +104,6 @@ public sealed class DefaultPolicyEngine : IPolicyEngine
         }
 
         return false;
-    }
-
-    private static string? ExtractStringArg(JsonElement args, string name)
-    {
-        if (args.ValueKind == JsonValueKind.Object &&
-            args.TryGetProperty(name, out var valueEl) &&
-            valueEl.ValueKind == JsonValueKind.String)
-        {
-            return valueEl.GetString();
-        }
-
-        return null;
-    }
-
-    private static string? ExtractCommand(JsonElement args)
-    {
-        if (args.ValueKind == JsonValueKind.Object &&
-            args.TryGetProperty("command", out var commandEl) &&
-            commandEl.ValueKind == JsonValueKind.String)
-        {
-            return commandEl.GetString();
-        }
-
-        return null;
     }
 
     private static bool IsRiskyShell(string command)

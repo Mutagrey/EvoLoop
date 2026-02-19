@@ -11,12 +11,19 @@ var tests = new List<(string Name, Func<Task> Run)>
     ("Policy denies outside workspace", TestPolicyDeniesOutsideWorkspace),
     ("Policy denies sibling path prefix bypass", TestPolicyDeniesSiblingPrefixBypass),
     ("Policy denies exec_shell cwd outside workspace", TestPolicyDeniesExecShellCwdOutsideWorkspace),
+    ("Policy denies outside workspace path alias", TestPolicyDeniesOutsideWorkspacePathAlias),
     ("Policy denies destructive shell patterns", TestPolicyDeniesDestructiveShellPatterns),
+    ("Policy reads nested shell command alias", TestPolicyReadsNestedShellCommandAlias),
     ("Policy requires approval for writes", TestPolicyRequiresApprovalForWrite),
     ("Offline strict denies non-approved network shell", TestOfflineStrictDeniesNetworkShell),
     ("Offline strict allows approved gateway host with approval", TestOfflineStrictAllowsApprovedHostWithApproval),
     ("ReAct loop retries on non-json model output", TestLoopRetriesOnNonJsonOutput),
+    ("ToolArgumentReader maps path aliases and nested input", TestToolArgumentReaderAliasAndNested),
+    ("ReAct loop auto-repairs missing path from task context", TestLoopAutoRepairsMissingPathFromTask),
+    ("ReAct loop rejects tool call with missing required args", TestLoopRejectsMissingRequiredArgs),
     ("ReAct loop recovers tool call from plain text action output", TestLoopRecoversToolCallFromPlainText),
+    ("ReAct loop parses tool_calls function variant", TestLoopParsesToolCallsFunctionVariant),
+    ("ReAct loop bootstraps after final-without-tools", TestLoopBootstrapsAfterFinalWithoutTools),
     ("ReAct loop switches profile after invalid responses", TestLoopSwitchesProfileAfterInvalidResponses),
     ("ReAct loop stops after repeated invalid output", TestLoopStopsAfterRepeatedInvalidOutput),
     ("ReAct loop stops after repeated unknown tool output", TestLoopStopsAfterRepeatedUnknownToolOutput),
@@ -148,6 +155,25 @@ static Task TestPolicyDeniesExecShellCwdOutsideWorkspace()
     }
 }
 
+static Task TestPolicyDeniesOutsideWorkspacePathAlias()
+{
+    var config = new AgentConfig();
+    var policy = new DefaultPolicyEngine(config);
+
+    using var doc = JsonDocument.Parse("{\"filePath\":\"../secret.txt\"}");
+    var call = new ToolCall("fs_read", doc.RootElement.Clone(), "alias path");
+    var context = new ToolContext(
+        WorkspaceRoot: "/tmp/workspace",
+        SessionId: "s1",
+        ProfileName: "reasoning",
+        Config: config,
+        SearchService: new NullSearchService());
+
+    var decision = policy.Evaluate(call, context);
+    Assert(decision.Kind == PolicyDecisionKind.Deny, "Expected deny decision for outside workspace path via alias.");
+    return Task.CompletedTask;
+}
+
 static Task TestPolicyDeniesDestructiveShellPatterns()
 {
     var config = new AgentConfig();
@@ -158,6 +184,19 @@ static Task TestPolicyDeniesDestructiveShellPatterns()
 
     var decision = policy.Evaluate(call, context);
     Assert(decision.Kind == PolicyDecisionKind.Deny, "Expected deny for destructive shell pattern.");
+    return Task.CompletedTask;
+}
+
+static Task TestPolicyReadsNestedShellCommandAlias()
+{
+    var config = new AgentConfig();
+    var policy = new DefaultPolicyEngine(config);
+    using var doc = JsonDocument.Parse("{\"args\":{\"cmd\":\"git status\"}}");
+    var call = new ToolCall("exec_shell", doc.RootElement.Clone(), "nested alias");
+    var context = new ToolContext("/tmp/workspace", "s1", "reasoning", config, new NullSearchService());
+
+    var decision = policy.Evaluate(call, context);
+    Assert(decision.Kind == PolicyDecisionKind.Allow, "Expected policy to read nested alias command and allow benign command.");
     return Task.CompletedTask;
 }
 
@@ -269,6 +308,104 @@ static async Task TestLoopRetriesOnNonJsonOutput()
     Assert(result.StepTrace.Count == 1, "Expected one executed tool step after invalid response retry.");
 }
 
+static Task TestToolArgumentReaderAliasAndNested()
+{
+    using var aliasDoc = JsonDocument.Parse("{\"filePath\":\"src/Program.cs\"}");
+    var aliasPath = ToolArgumentReader.GetString(aliasDoc.RootElement, "path");
+    Assert(aliasPath == "src/Program.cs", "Expected alias filePath to map to path.");
+
+    using var nestedDoc = JsonDocument.Parse("{\"arguments\":{\"path\":\"src/App.cs\"}}");
+    var nestedPath = ToolArgumentReader.GetString(nestedDoc.RootElement, "path");
+    Assert(nestedPath == "src/App.cs", "Expected nested arguments.path to be resolved.");
+
+    using var inputDoc = JsonDocument.Parse("{\"input\":\"{\\\"path\\\":\\\"src/Nested.cs\\\"}\"}");
+    var inputPath = ToolArgumentReader.GetString(inputDoc.RootElement, "path");
+    Assert(inputPath == "src/Nested.cs", "Expected JSON string input to be parsed for path.");
+
+    return Task.CompletedTask;
+}
+
+static async Task TestLoopAutoRepairsMissingPathFromTask()
+{
+    var temp = Path.Combine(Path.GetTempPath(), "agent-tests-repair-" + Guid.NewGuid().ToString("n"));
+    Directory.CreateDirectory(temp);
+
+    try
+    {
+        await File.WriteAllTextAsync(Path.Combine(temp, "README.md"), "hello");
+
+        var config = new AgentConfig();
+        var responses = new Queue<ModelTurnResult>();
+        responses.Enqueue(new ModelTurnResult("{\"type\":\"tool\",\"tool\":\"fs_read\",\"reason\":\"read target\",\"arguments\":{}}", "fake"));
+        responses.Enqueue(new ModelTurnResult("{\"type\":\"final\",\"message\":\"done\"}", "fake"));
+
+        var router = new FakeModelRouter(new FakeModelClient(responses), "fake");
+        var loop = new ReActAgentLoop(
+            router,
+            new ITool[] { new FsReadTool() },
+            new DefaultPolicyEngine(config),
+            new AutoApproveService(true),
+            new InMemoryEventStore(),
+            new DefaultToolContextFactory(config, new NullSearchService()),
+            config);
+
+        var result = await loop.RunAsync(new AgentRunRequest("read README.md and summarize", temp, "reasoning", 6), CancellationToken.None);
+        Assert(result.Success, "Expected success after auto-repairing missing path.");
+        Assert(result.StepTrace.Count == 1, "Expected one fs_read step after auto-repair.");
+        Assert(result.StepTrace[0].ToolName.Equals("fs_read", StringComparison.OrdinalIgnoreCase), "Expected fs_read tool execution.");
+    }
+    finally
+    {
+        if (Directory.Exists(temp))
+        {
+            Directory.Delete(temp, true);
+        }
+    }
+}
+
+static async Task TestLoopRejectsMissingRequiredArgs()
+{
+    var config = new AgentConfig
+    {
+        Runtime = new RuntimeConfig
+        {
+            MaxSteps = 5,
+            MaxInvalidModelResponses = 2,
+            MaxConsecutiveFinalWithoutTools = 3,
+            InvalidResponsesBeforeProfileSwitch = 10,
+            FinalWithoutToolsBeforeProfileSwitch = 10,
+            ToolTimeoutSeconds = 120,
+            MaxOutputBytes = 64 * 1024,
+            ModelMinOutputTokens = 256,
+            ModelMaxOutputTokens = 4096,
+            ModelMinTemperature = 0.0,
+            ModelMaxTemperature = 0.7,
+            LexicalSearchDefaultMaxResults = 20,
+            RerankCandidateLimit = 12
+        }
+    };
+
+    var responses = new Queue<ModelTurnResult>();
+    responses.Enqueue(new ModelTurnResult("{\"type\":\"tool\",\"tool\":\"fs_read\",\"reason\":\"read file\",\"arguments\":{}}", "fake"));
+    responses.Enqueue(new ModelTurnResult("{\"type\":\"tool\",\"tool\":\"fs_read\",\"reason\":\"read file\",\"arguments\":{}}", "fake"));
+
+    var router = new FakeModelRouter(new FakeModelClient(responses), "fake");
+    var loop = new ReActAgentLoop(
+        router,
+        new ITool[] { new FsReadTool() },
+        new DefaultPolicyEngine(config),
+        new AutoApproveService(true),
+        new InMemoryEventStore(),
+        new DefaultToolContextFactory(config, new NullSearchService()),
+        config);
+
+    var result = await loop.RunAsync(new AgentRunRequest("read file", Path.GetTempPath(), "reasoning", 5), CancellationToken.None);
+    Assert(!result.Success, "Expected failure after repeated missing required args.");
+    Assert(result.FinalMessage.Contains("missing arguments", StringComparison.OrdinalIgnoreCase) ||
+           result.FinalMessage.Contains("invalid model decisions", StringComparison.OrdinalIgnoreCase),
+        "Expected missing-arguments validation failure to stop run.");
+}
+
 static async Task TestLoopRecoversToolCallFromPlainText()
 {
     var temp = Path.Combine(Path.GetTempPath(), "agent-tests-plain-" + Guid.NewGuid().ToString("n"));
@@ -294,6 +431,64 @@ static async Task TestLoopRecoversToolCallFromPlainText()
         var result = await loop.RunAsync(new AgentRunRequest("inspect project files", temp, "reasoning", 6), CancellationToken.None);
         Assert(result.Success, "Expected success after recovering tool call from plain text.");
         Assert(result.StepTrace.Count == 1, "Expected one tool step after plain-text recovery.");
+    }
+    finally
+    {
+        if (Directory.Exists(temp))
+        {
+            Directory.Delete(temp, true);
+        }
+    }
+}
+
+static async Task TestLoopParsesToolCallsFunctionVariant()
+{
+    var config = new AgentConfig();
+    var responses = new Queue<ModelTurnResult>();
+    responses.Enqueue(new ModelTurnResult("{\"tool_calls\":[{\"function\":{\"name\":\"echo\",\"arguments\":\"{\\\"value\\\":\\\"ok\\\"}\"}}]}", "fake"));
+    responses.Enqueue(new ModelTurnResult("{\"type\":\"final\",\"message\":\"done\"}", "fake"));
+
+    var router = new FakeModelRouter(new FakeModelClient(responses), "fake");
+    var loop = new ReActAgentLoop(
+        router,
+        new ITool[] { new EchoTool() },
+        new DefaultPolicyEngine(config),
+        new AutoApproveService(true),
+        new InMemoryEventStore(),
+        new DefaultToolContextFactory(config, new NullSearchService()),
+        config);
+
+    var result = await loop.RunAsync(new AgentRunRequest("run quick check", Path.GetTempPath(), "reasoning", 6), CancellationToken.None);
+    Assert(result.Success, "Expected success when parser handles tool_calls function format.");
+    Assert(result.StepTrace.Count == 1, "Expected one tool execution from tool_calls format.");
+}
+
+static async Task TestLoopBootstrapsAfterFinalWithoutTools()
+{
+    var temp = Path.Combine(Path.GetTempPath(), "agent-tests-bootstrap-" + Guid.NewGuid().ToString("n"));
+    Directory.CreateDirectory(temp);
+
+    try
+    {
+        var config = new AgentConfig();
+        var responses = new Queue<ModelTurnResult>();
+        responses.Enqueue(new ModelTurnResult("{\"type\":\"final\",\"message\":\"done too early\"}", "fake"));
+        responses.Enqueue(new ModelTurnResult("{\"type\":\"final\",\"message\":\"done\"}", "fake"));
+
+        var router = new FakeModelRouter(new FakeModelClient(responses), "fake");
+        var loop = new ReActAgentLoop(
+            router,
+            new ITool[] { new FsListTool() },
+            new DefaultPolicyEngine(config),
+            new AutoApproveService(true),
+            new InMemoryEventStore(),
+            new DefaultToolContextFactory(config, new NullSearchService()),
+            config);
+
+        var result = await loop.RunAsync(new AgentRunRequest("inspect project folder then finish", temp, "reasoning", 6), CancellationToken.None);
+        Assert(result.Success, "Expected success after deterministic bootstrap tool call.");
+        Assert(result.StepTrace.Count == 1, "Expected exactly one bootstrap tool call.");
+        Assert(result.StepTrace[0].ToolName.Equals("fs_list", StringComparison.OrdinalIgnoreCase), "Expected bootstrap fs_list tool.");
     }
     finally
     {

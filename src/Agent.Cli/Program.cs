@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.RegularExpressions;
 using Agent.Core;
 using Agent.Providers;
 using Agent.Storage;
@@ -123,15 +124,15 @@ public static class Program
         string profile)
     {
         renderer.WriteHeader("EvoLoop Agent CLI");
-        renderer.WriteInfo($"Workspace: {workspace}");
-        renderer.WriteInfo($"Profile: {profile}");
-        renderer.WriteInfo("Type '/task <your request>' to run. '/exit' to quit.");
+        renderer.WritePanel(
+            "Session",
+            $"Workspace: {workspace}\nProfile: {profile}\nCommands: /task, /status, /tools, /history, /config, /exit");
 
         AgentRunResult? lastRun = null;
 
         while (true)
         {
-            Console.Write("\nagent> ");
+            Console.Write("\nagent :: ");
             var input = Console.ReadLine();
             if (input is null)
             {
@@ -387,7 +388,7 @@ internal sealed class ConsoleApprovalService : IApprovalService
 
         while (true)
         {
-            Console.Write("approve> ");
+            Console.Write("approve :: ");
             var input = Console.ReadLine();
             if (input is null)
             {
@@ -418,6 +419,8 @@ internal sealed class SpinnerObserver : IAgentRunObserver, IDisposable
     private readonly HashSet<string> _editedFiles = new(StringComparer.OrdinalIgnoreCase);
     private readonly List<string> _ranCommands = new();
     private readonly List<string> _exploreNotes = new();
+    private int? _lastAnnouncedStep;
+    private DateTimeOffset _spinnerStartedAtUtc;
     private CancellationTokenSource? _spinnerCts;
     private Task? _spinnerTask;
 
@@ -438,43 +441,56 @@ internal sealed class SpinnerObserver : IAgentRunObserver, IDisposable
                 break;
             case AgentRunEventType.ModelCallCompleted:
                 StopSpinner();
-                _renderer.WriteStatus("MODEL", evt.Message, ConsoleColor.Blue);
+                AnnounceStepIfNeeded(evt.Step);
                 break;
             case AgentRunEventType.ModelProfileSwitched:
-                _renderer.WriteStatus("MODEL-SWITCH", evt.Message, ConsoleColor.Cyan);
+                AnnounceStepIfNeeded(evt.Step);
+                _renderer.WriteStatus("MODEL", evt.Message, ConsoleColor.Cyan, depth: 1);
                 break;
             case AgentRunEventType.ModelDecisionRecovered:
-                _renderer.WriteStatus("RECOVER", evt.Message, ConsoleColor.Cyan);
+                AnnounceStepIfNeeded(evt.Step);
+                _renderer.WriteStatus("RECOVER", evt.Message, ConsoleColor.Cyan, depth: 1);
                 break;
             case AgentRunEventType.ModelResponseInvalid:
-                _renderer.WriteStatus("WARN", evt.Message, ConsoleColor.Yellow);
+                AnnounceStepIfNeeded(evt.Step);
+                _renderer.WriteStatus("WARN", evt.Message, ConsoleColor.Yellow, depth: 1);
                 break;
             case AgentRunEventType.FinalRejectedRequiresTool:
-                _renderer.WriteStatus("WARN", evt.Message, ConsoleColor.Yellow);
+                AnnounceStepIfNeeded(evt.Step);
+                _renderer.WriteStatus("WARN", evt.Message, ConsoleColor.Yellow, depth: 1);
                 break;
             case AgentRunEventType.ToolDecision:
-                _renderer.WriteStatus("PLAN", evt.Message, ConsoleColor.Magenta);
+                AnnounceStepIfNeeded(evt.Step);
+                _renderer.WriteStatus("PLAN", evt.Message, ConsoleColor.Magenta, depth: 1);
                 break;
             case AgentRunEventType.PolicyDenied:
-                _renderer.WriteStatus("DENY", evt.Message, ConsoleColor.Red);
+                AnnounceStepIfNeeded(evt.Step);
+                _renderer.WriteStatus("DENY", evt.Message, ConsoleColor.Red, depth: 2, isLast: true);
                 break;
             case AgentRunEventType.ApprovalRequired:
-                _renderer.WriteStatus("APPROVAL", evt.Message, ConsoleColor.Yellow);
+                AnnounceStepIfNeeded(evt.Step);
+                _renderer.WriteStatus("APPROVAL", evt.Message, ConsoleColor.Yellow, depth: 2);
                 break;
             case AgentRunEventType.ApprovalGranted:
-                _renderer.WriteStatus("APPROVAL", "Approved", ConsoleColor.Green);
+                AnnounceStepIfNeeded(evt.Step);
+                _renderer.WriteStatus("APPROVAL", "Approved", ConsoleColor.Green, depth: 2);
                 break;
             case AgentRunEventType.ApprovalRejected:
-                _renderer.WriteStatus("APPROVAL", "Rejected", ConsoleColor.Red);
+                AnnounceStepIfNeeded(evt.Step);
+                _renderer.WriteStatus("APPROVAL", "Rejected", ConsoleColor.Red, depth: 2, isLast: true);
                 break;
             case AgentRunEventType.ToolExecutionStarted:
-                _renderer.WriteStatus("RUN", evt.Message, ConsoleColor.Cyan);
+                AnnounceStepIfNeeded(evt.Step);
+                _renderer.WriteStatus("RUN", evt.Message, ConsoleColor.Cyan, depth: 2);
                 break;
             case AgentRunEventType.ToolExecutionCompleted:
+                AnnounceStepIfNeeded(evt.Step);
                 _renderer.WriteStatus(
                     "RESULT",
                     evt.Message,
-                    evt.Message.Contains("failed", StringComparison.OrdinalIgnoreCase) ? ConsoleColor.Red : ConsoleColor.Green);
+                    evt.Message.Contains("failed", StringComparison.OrdinalIgnoreCase) ? ConsoleColor.Red : ConsoleColor.Green,
+                    depth: 2,
+                    isLast: true);
                 TrackActivity(evt.Message);
                 break;
             case AgentRunEventType.SessionCompleted:
@@ -488,6 +504,22 @@ internal sealed class SpinnerObserver : IAgentRunObserver, IDisposable
         }
 
         return Task.CompletedTask;
+    }
+
+    private void AnnounceStepIfNeeded(int? step)
+    {
+        if (!step.HasValue)
+        {
+            return;
+        }
+
+        if (_lastAnnouncedStep.HasValue && _lastAnnouncedStep.Value == step.Value)
+        {
+            return;
+        }
+
+        _lastAnnouncedStep = step.Value;
+        _renderer.WriteStatus("STEP", $"Step {step.Value}", ConsoleColor.Cyan);
     }
 
     public void Dispose()
@@ -507,16 +539,16 @@ internal sealed class SpinnerObserver : IAgentRunObserver, IDisposable
 
         if (_editedFiles.Count > 0)
         {
-            sb.AppendLine("Edited");
+            sb.AppendLine($"Edited ({_editedFiles.Count})");
             foreach (var file in _editedFiles.OrderBy(x => x, StringComparer.OrdinalIgnoreCase))
             {
                 if (diffStats.TryGetValue(file, out var stat))
                 {
-                    sb.AppendLine($"{file}  +{stat.Added} -{stat.Deleted}");
+                    sb.AppendLine($" - {file}  +{stat.Added} -{stat.Deleted}");
                 }
                 else
                 {
-                    sb.AppendLine(file);
+                    sb.AppendLine($" - {file}");
                 }
             }
             sb.AppendLine();
@@ -527,25 +559,25 @@ internal sealed class SpinnerObserver : IAgentRunObserver, IDisposable
             sb.AppendLine($"Explored {_exploreNotes.Count} item(s)");
             foreach (var note in _exploreNotes.TakeLast(6))
             {
-                sb.AppendLine(note);
+                sb.AppendLine($" - {note}");
             }
             sb.AppendLine();
         }
 
         if (_ranCommands.Count > 0)
         {
-            sb.AppendLine("Ran");
+            sb.AppendLine($"Ran ({_ranCommands.Distinct(StringComparer.OrdinalIgnoreCase).Count()})");
             foreach (var cmd in _ranCommands.Distinct(StringComparer.OrdinalIgnoreCase).TakeLast(10))
             {
-                sb.AppendLine(cmd);
+                sb.AppendLine($" - {cmd}");
             }
             sb.AppendLine();
         }
 
-        sb.AppendLine("Timeline");
+        sb.AppendLine("Timeline (latest)");
         foreach (var line in _activityFeed.TakeLast(14))
         {
-            sb.AppendLine(line);
+            sb.AppendLine($" > {line}");
         }
 
         _renderer.WritePanel("Activity", sb.ToString().TrimEnd());
@@ -558,15 +590,25 @@ internal sealed class SpinnerObserver : IAgentRunObserver, IDisposable
             StopSpinner();
             _spinnerCts = new CancellationTokenSource();
             var token = _spinnerCts.Token;
-            var hintText = string.IsNullOrWhiteSpace(hint) ? "Thinking" : ToOneLine(hint, 60);
-            var label = step.HasValue ? $"Thinking (step {step.Value}) {hintText}" : $"Thinking {hintText}";
+            _spinnerStartedAtUtc = DateTimeOffset.UtcNow;
+            var hintText = string.IsNullOrWhiteSpace(hint) ? "Analyzing next action" : ToOneLine(hint, 90);
+            var stepToken = TryParseStepProgress(hintText, out var current, out var total)
+                ? $"Step {current}/{total} {BuildStepBar(current, total)}"
+                : step.HasValue ? $"Step {step.Value}" : "Step";
             _spinnerTask = Task.Run(async () =>
             {
                 var frames = new[] { "|", "/", "-", "\\" };
                 var index = 0;
+                var lastPrintedWidth = 0;
                 while (!token.IsCancellationRequested)
                 {
-                    Console.Write($"\r{label} {frames[index++ % frames.Length]}");
+                    var elapsed = (DateTimeOffset.UtcNow - _spinnerStartedAtUtc).TotalSeconds;
+                    var frame = frames[index++ % frames.Length];
+                    var line = $"{stepToken}  {hintText}  {elapsed,5:0.0}s {frame}";
+                    line = FitInline(line, GetConsoleWidth() - 1);
+                    var padded = line.PadRight(Math.Max(line.Length, lastPrintedWidth));
+                    Console.Write($"\r{padded}");
+                    lastPrintedWidth = padded.Length;
                     try
                     {
                         await Task.Delay(120, token);
@@ -577,9 +619,72 @@ internal sealed class SpinnerObserver : IAgentRunObserver, IDisposable
                     }
                 }
 
-                Console.Write("\r" + new string(' ', Math.Max(20, label.Length + 4)) + "\r");
+                Console.Write("\r" + new string(' ', Math.Max(20, lastPrintedWidth)) + "\r");
             }, token);
         }
+    }
+
+    private static bool TryParseStepProgress(string text, out int current, out int total)
+    {
+        current = 0;
+        total = 0;
+        var match = Regex.Match(text, @"Step\s+(\d+)\s*/\s*(\d+)", RegexOptions.IgnoreCase);
+        if (!match.Success)
+        {
+            return false;
+        }
+
+        if (!int.TryParse(match.Groups[1].Value, out current) ||
+            !int.TryParse(match.Groups[2].Value, out total) ||
+            total <= 0)
+        {
+            current = 0;
+            total = 0;
+            return false;
+        }
+
+        current = Math.Clamp(current, 0, total);
+        return true;
+    }
+
+    private static string BuildStepBar(int current, int total)
+    {
+        const int width = 18;
+        if (total <= 0)
+        {
+            return "[" + new string('-', width) + "]";
+        }
+
+        var filled = (int)Math.Round((current / (double)total) * width);
+        filled = Math.Clamp(filled, 0, width);
+        return "[" + new string('#', filled) + new string('-', width - filled) + "]";
+    }
+
+    private static int GetConsoleWidth()
+    {
+        try
+        {
+            return Math.Max(60, Console.WindowWidth);
+        }
+        catch
+        {
+            return 100;
+        }
+    }
+
+    private static string FitInline(string text, int width)
+    {
+        if (width <= 0 || text.Length <= width)
+        {
+            return text;
+        }
+
+        if (width < 4)
+        {
+            return text[..width];
+        }
+
+        return text[..(width - 3)] + "...";
     }
 
     private void StopSpinner()
@@ -716,6 +821,9 @@ internal sealed class SpinnerObserver : IAgentRunObserver, IDisposable
 
 internal sealed class AnsiRenderer
 {
+    private const int MinFrameWidth = 64;
+    private const int MaxFrameWidth = 120;
+    private const int StatusTagWidth = 12;
     private readonly bool _useColor;
 
     public AnsiRenderer(bool useColor)
@@ -725,29 +833,57 @@ internal sealed class AnsiRenderer
 
     public void WriteHeader(string title)
     {
-        var line = new string('=', Math.Max(10, title.Length + 8));
-        WriteRaw(Colorize(line, ConsoleColor.Cyan));
-        WriteRaw(Colorize($"   {title}", ConsoleColor.Cyan));
-        WriteRaw(Colorize(line, ConsoleColor.Cyan));
+        var width = GetFrameWidth();
+        var top = "+" + new string('=', width - 2) + "+";
+        WriteRaw(Colorize(top, ConsoleColor.Cyan));
+        WriteFramedLine(title.ToUpperInvariant(), width, ConsoleColor.Cyan);
+        WriteFramedLine("Autonomous Coding Agent CLI", width, ConsoleColor.DarkCyan);
+        WriteRaw(Colorize(top, ConsoleColor.Cyan));
     }
 
     public void WritePanel(string title, string body)
     {
-        var border = "+" + new string('-', Math.Max(12, title.Length + 2)) + "+";
-        WriteRaw(Colorize(border, ConsoleColor.DarkGray));
-        WriteRaw(Colorize($"| {title} |", ConsoleColor.White));
-        WriteRaw(Colorize(border, ConsoleColor.DarkGray));
-        WriteRaw(body);
+        var width = GetFrameWidth();
+        var innerWidth = width - 4;
+        var safeTitle = TruncateInline(title, Math.Max(1, innerWidth - 2));
+        var top = "+-" + safeTitle + " " + new string('-', Math.Max(1, innerWidth - safeTitle.Length - 1)) + "+";
+        var bottom = "+" + new string('-', width - 2) + "+";
+
+        WriteRaw(Colorize(top, ConsoleColor.DarkGray));
+        foreach (var line in WrapText(body, innerWidth))
+        {
+            WriteRaw($"| {line.PadRight(innerWidth)} |");
+        }
+        WriteRaw(Colorize(bottom, ConsoleColor.DarkGray));
     }
 
-    public void WriteStatus(string tag, string message, ConsoleColor color)
+    public void WriteStatus(string tag, string message, ConsoleColor color, int depth = 0, bool isLast = false)
     {
-        WriteRaw($"[{Colorize(tag, color)}] {message}");
+        depth = Math.Max(0, depth);
+        var timestamp = DateTime.Now.ToString("HH:mm:ss");
+        var normalizedTag = NormalizeTag(tag);
+        var prefixPlain = $"[{timestamp}] [{normalizedTag}] ";
+        var prefixColored = $"{Colorize($"[{timestamp}]", ConsoleColor.DarkGray)} {Colorize($"[{normalizedTag}]", color)} ";
+        var treePrefix = BuildTreePrefix(depth, isLast);
+        var treePrefixColored = treePrefix.Length == 0 ? string.Empty : Colorize(treePrefix, ConsoleColor.DarkGray);
+        var indent = new string(' ', prefixPlain.Length + treePrefix.Length);
+        var maxMessageWidth = Math.Max(24, GetFrameWidth() - prefixPlain.Length - treePrefix.Length - 1);
+        var lines = WrapText(message, maxMessageWidth).ToList();
+        if (lines.Count == 0)
+        {
+            lines.Add(string.Empty);
+        }
+
+        WriteRaw(prefixColored + treePrefixColored + lines[0]);
+        foreach (var line in lines.Skip(1))
+        {
+            WriteRaw(indent + line);
+        }
     }
 
-    public void WriteInfo(string message) => WriteRaw(Colorize(message, ConsoleColor.Gray));
-    public void WriteWarn(string message) => WriteRaw(Colorize(message, ConsoleColor.Yellow));
-    public void WriteError(string message) => WriteRaw(Colorize(message, ConsoleColor.Red));
+    public void WriteInfo(string message) => WriteStatus("INFO", message, ConsoleColor.Gray);
+    public void WriteWarn(string message) => WriteStatus("WARN", message, ConsoleColor.Yellow);
+    public void WriteError(string message) => WriteStatus("ERROR", message, ConsoleColor.Red);
 
     private void WriteRaw(string text)
     {
@@ -783,5 +919,119 @@ internal sealed class AnsiRenderer
         };
 
         return $"\u001b[{code}m{text}\u001b[0m";
+    }
+
+    private int GetFrameWidth()
+    {
+        var width = 100;
+        try
+        {
+            width = Console.WindowWidth > 0 ? Console.WindowWidth : 100;
+        }
+        catch
+        {
+            // keep default width
+        }
+
+        return Math.Clamp(width, MinFrameWidth, MaxFrameWidth);
+    }
+
+    private static string NormalizeTag(string tag)
+    {
+        var clean = string.IsNullOrWhiteSpace(tag) ? "STATUS" : tag.Trim().ToUpperInvariant();
+        if (clean.Length > StatusTagWidth)
+        {
+            clean = clean[..StatusTagWidth];
+        }
+
+        return clean.PadRight(StatusTagWidth);
+    }
+
+    private static string BuildTreePrefix(int depth, bool isLast)
+    {
+        if (depth <= 0)
+        {
+            return string.Empty;
+        }
+
+        var sb = new StringBuilder(depth * 3);
+        for (var level = 1; level < depth; level++)
+        {
+            sb.Append("|  ");
+        }
+
+        sb.Append(isLast ? "`- " : "|- ");
+        return sb.ToString();
+    }
+
+    private void WriteFramedLine(string value, int width, ConsoleColor color)
+    {
+        var innerWidth = width - 4;
+        var text = TruncateInline(value, innerWidth);
+        var content = text.PadRight(innerWidth);
+        WriteRaw(Colorize($"| {content} |", color));
+    }
+
+    private static string TruncateInline(string value, int width)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return string.Empty;
+        }
+
+        var oneLine = value.Replace('\r', ' ').Replace('\n', ' ').Trim();
+        if (oneLine.Length <= width)
+        {
+            return oneLine;
+        }
+
+        if (width <= 3)
+        {
+            return oneLine[..width];
+        }
+
+        return oneLine[..(width - 3)] + "...";
+    }
+
+    private static IEnumerable<string> WrapText(string? text, int width)
+    {
+        if (width <= 0)
+        {
+            yield return string.Empty;
+            yield break;
+        }
+
+        if (string.IsNullOrEmpty(text))
+        {
+            yield return string.Empty;
+            yield break;
+        }
+
+        var normalized = text.Replace("\r\n", "\n").Replace('\r', '\n');
+        var rows = normalized.Split('\n');
+        foreach (var row in rows)
+        {
+            var line = row.TrimEnd();
+            if (line.Length == 0)
+            {
+                yield return string.Empty;
+                continue;
+            }
+
+            while (line.Length > width)
+            {
+                var take = width;
+                var breakAt = line.LastIndexOf(' ', Math.Min(width - 1, line.Length - 1), Math.Min(width, line.Length));
+                if (breakAt > 0)
+                {
+                    take = breakAt;
+                }
+
+                yield return line[..take].TrimEnd();
+                line = line[take..].TrimStart();
+            }
+
+            yield return line;
+        }
     }
 }

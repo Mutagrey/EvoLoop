@@ -61,6 +61,7 @@ public sealed class ReActAgentLoop : IAgentLoop
         var toolStepsExecuted = 0;
         var consecutiveInvalidResponses = 0;
         var consecutiveFinalWithoutTools = 0;
+        var pathHints = new List<string>();
 
         string finalMessage = "Agent ended without final answer.";
         bool success = false;
@@ -169,37 +170,57 @@ public sealed class ReActAgentLoop : IAgentLoop
                             $"Final rejected at step {step}: task requires tool actions first.",
                             step), ct);
 
-                        if (consecutiveFinalWithoutTools >= GetSwitchThreshold(_config.Runtime.FinalWithoutToolsBeforeProfileSwitch) &&
-                            TrySwitchProfile(profilePlan, ref profileIndex, ref currentProfileName, ref modelClient, ref modelName, request.WorkspaceRoot, session.SessionId, ref context))
+                        var deterministicBootstrap = TryCreateBootstrapDecision(
+                            requiresToolBeforeFinal,
+                            toolStepsExecuted,
+                            1,
+                            request.Task);
+                        if (deterministicBootstrap is not null)
                         {
-                            consecutiveInvalidResponses = 0;
+                            decision = deterministicBootstrap;
                             consecutiveFinalWithoutTools = 0;
                             await observer.OnEventAsync(new AgentRunEvent(
-                                AgentRunEventType.ModelProfileSwitched,
-                                $"Switched model profile to '{currentProfileName}' after repeated final-without-tools replies.",
-                                step), ct);
-                            history.Add(new ModelMessage("user", $"OBSERVATION: Profile switched to '{currentProfileName}'. You must use tools for this task."));
+                                AgentRunEventType.ModelDecisionRecovered,
+                                $"Recovered by deterministic bootstrap tool '{decision.ToolName}' after final-without-tools.",
+                                step,
+                                decision.ToolName), ct);
+                        }
+                        else
+                        {
+                            if (consecutiveFinalWithoutTools >= GetSwitchThreshold(_config.Runtime.FinalWithoutToolsBeforeProfileSwitch) &&
+                                TrySwitchProfile(profilePlan, ref profileIndex, ref currentProfileName, ref modelClient, ref modelName, request.WorkspaceRoot, session.SessionId, ref context))
+                            {
+                                consecutiveInvalidResponses = 0;
+                                consecutiveFinalWithoutTools = 0;
+                                await observer.OnEventAsync(new AgentRunEvent(
+                                    AgentRunEventType.ModelProfileSwitched,
+                                    $"Switched model profile to '{currentProfileName}' after repeated final-without-tools replies.",
+                                    step), ct);
+                                history.Add(new ModelMessage("user", $"OBSERVATION: Profile switched to '{currentProfileName}'. You must use tools for this task."));
+                                continue;
+                            }
+
+                            if (consecutiveFinalWithoutTools >= _config.Runtime.MaxConsecutiveFinalWithoutTools)
+                            {
+                                finalMessage = $"Stopped after {consecutiveFinalWithoutTools} final-only replies without any tool calls for an action-oriented task.";
+                                success = false;
+                                break;
+                            }
+
+                            history.Add(new ModelMessage("assistant", modelResult.Content));
+                            history.Add(new ModelMessage(
+                                "user",
+                                "OBSERVATION: This task requires workspace actions. Call an appropriate tool before returning final."));
                             continue;
                         }
-
-                        if (consecutiveFinalWithoutTools >= _config.Runtime.MaxConsecutiveFinalWithoutTools)
-                        {
-                            finalMessage = $"Stopped after {consecutiveFinalWithoutTools} final-only replies without any tool calls for an action-oriented task.";
-                            success = false;
-                            break;
-                        }
-
-                        history.Add(new ModelMessage("assistant", modelResult.Content));
-                        history.Add(new ModelMessage(
-                            "user",
-                            "OBSERVATION: This task requires workspace actions. Call an appropriate tool before returning final."));
-                        continue;
                     }
-
-                    consecutiveFinalWithoutTools = 0;
-                    finalMessage = decision.Message;
-                    success = true;
-                    break;
+                    else
+                    {
+                        consecutiveFinalWithoutTools = 0;
+                        finalMessage = decision.Message;
+                        success = true;
+                        break;
+                    }
                 }
 
                 if (decision.Type == AgentDecisionType.Clarify)
@@ -244,12 +265,74 @@ public sealed class ReActAgentLoop : IAgentLoop
                     continue;
                 }
 
+                if (TryRepairToolDecision(
+                    tool.Name,
+                    decision,
+                    request.Task,
+                    request.WorkspaceRoot,
+                    pathHints,
+                    out var repairedDecision,
+                    out var repairNote))
+                {
+                    decision = repairedDecision;
+                    if (!string.IsNullOrWhiteSpace(repairNote))
+                    {
+                        await observer.OnEventAsync(new AgentRunEvent(
+                            AgentRunEventType.ModelDecisionRecovered,
+                            repairNote,
+                            step,
+                            tool.Name), ct);
+                    }
+                }
+
+                var missingRequired = tool.Schema.RequiredFields
+                    .Where(required => !ToolArgumentReader.HasValue(decision.Arguments, required))
+                    .ToArray();
+                if (missingRequired.Length > 0)
+                {
+                    consecutiveInvalidResponses++;
+                    var missing = string.Join(", ", missingRequired);
+                    await observer.OnEventAsync(new AgentRunEvent(
+                        AgentRunEventType.ModelResponseInvalid,
+                        $"Tool '{tool.Name}' missing required arguments: {missing}",
+                        step,
+                        tool.Name), ct);
+
+                    if (consecutiveInvalidResponses >= GetSwitchThreshold(_config.Runtime.InvalidResponsesBeforeProfileSwitch) &&
+                        TrySwitchProfile(profilePlan, ref profileIndex, ref currentProfileName, ref modelClient, ref modelName, request.WorkspaceRoot, session.SessionId, ref context))
+                    {
+                        consecutiveInvalidResponses = 0;
+                        consecutiveFinalWithoutTools = 0;
+                        await observer.OnEventAsync(new AgentRunEvent(
+                            AgentRunEventType.ModelProfileSwitched,
+                            $"Switched model profile to '{currentProfileName}' after repeated argument-validation failures.",
+                            step), ct);
+                        history.Add(new ModelMessage("user", $"OBSERVATION: Profile switched to '{currentProfileName}'. Tool '{tool.Name}' requires: {missing}."));
+                        continue;
+                    }
+
+                    if (consecutiveInvalidResponses >= _config.Runtime.MaxInvalidModelResponses)
+                    {
+                        finalMessage = $"Stopped after {consecutiveInvalidResponses} invalid model decisions (format/unknown tool/missing arguments).";
+                        success = false;
+                        break;
+                    }
+
+                    var requiredHint = string.Join(", ", tool.Schema.RequiredFields);
+                    history.Add(new ModelMessage("assistant", modelResult.Content));
+                    history.Add(new ModelMessage(
+                        "user",
+                        $"OBSERVATION: Tool '{tool.Name}' call is invalid. Missing required arguments: {missing}. " +
+                        $"Return STRICT JSON tool call and include required fields: {requiredHint}."));
+                    continue;
+                }
+
                 consecutiveInvalidResponses = 0;
                 consecutiveFinalWithoutTools = 0;
 
                 await observer.OnEventAsync(new AgentRunEvent(
                     AgentRunEventType.ToolDecision,
-                    BuildToolPlanMessage(tool.Name, decision.Reason, decision.Arguments),
+                    BuildToolPlanMessage(tool.Name, decision.Reason),
                     step,
                     tool.Name), ct);
 
@@ -364,6 +447,8 @@ public sealed class ReActAgentLoop : IAgentLoop
                     step,
                     tool.Name), ct);
 
+                CapturePathHints(pathHints, request.WorkspaceRoot, tool.Name, decision.Arguments, result);
+
                 var primaryOutput = !string.IsNullOrWhiteSpace(result.StdOut)
                     ? result.StdOut
                     : result.Message;
@@ -458,6 +543,7 @@ public sealed class ReActAgentLoop : IAgentLoop
         sb.AppendLine("- No extra keys outside schema unless needed for tool arguments.");
         sb.AppendLine("- No comments. No trailing commas.");
         sb.AppendLine("- Do not wrap JSON in markdown.");
+        sb.AppendLine("- For tool calls, include all required fields exactly as listed for that tool.");
         sb.AppendLine("Available tools:");
 
         foreach (var tool in toolList)
@@ -518,10 +604,39 @@ public sealed class ReActAgentLoop : IAgentLoop
         return sb.ToString();
     }
 
-    private static string BuildToolPlanMessage(string toolName, string reason, JsonElement arguments)
+    private static string BuildToolPlanMessage(string toolName, string reason)
     {
-        var normalizedReason = string.IsNullOrWhiteSpace(reason) ? "no reason provided" : ToOneLine(reason, 160);
-        return $"Plan {toolName}: {normalizedReason} | args {PreviewArguments(arguments)}";
+        var headline = toolName switch
+        {
+            "fs_list" => "Inspect workspace structure",
+            "fs_read" => "Read target file",
+            "fs_write" => "Write/update file",
+            "fs_patch" => "Apply patch to file",
+            "fs_delete" => "Delete file or directory",
+            "search_lexical" => "Find matching code by text search",
+            "search_semantic" => "Find relevant code by reranked search",
+            "exec_shell" => "Run shell command",
+            "git_status" => "Check git status",
+            "git_diff" => "Inspect git diff",
+            "git_log" => "Inspect recent commits",
+            "git_show" => "Inspect commit/object",
+            "git_add" => "Stage changes",
+            "git_commit" => "Create commit",
+            _ => $"Use tool {toolName}"
+        };
+
+        var normalizedReason = string.IsNullOrWhiteSpace(reason) ? string.Empty : ToOneLine(reason, 120);
+        var reasonProbe = normalizedReason.TrimStart();
+        if (reasonProbe.StartsWith("{", StringComparison.Ordinal) ||
+            reasonProbe.StartsWith("[", StringComparison.Ordinal) ||
+            reasonProbe.StartsWith("```", StringComparison.Ordinal))
+        {
+            normalizedReason = string.Empty;
+        }
+
+        return string.IsNullOrWhiteSpace(normalizedReason)
+            ? headline
+            : $"{headline}. {normalizedReason}";
     }
 
     private static string BuildToolRunMessage(string toolName, JsonElement arguments)
@@ -627,6 +742,383 @@ public sealed class ReActAgentLoop : IAgentLoop
         return truncated + "\n[truncated]";
     }
 
+    private static bool TryRepairToolDecision(
+        string toolName,
+        AgentDecision decision,
+        string task,
+        string workspaceRoot,
+        IReadOnlyList<string> pathHints,
+        out AgentDecision repaired,
+        out string repairNote)
+    {
+        var updates = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+
+        if (toolName.Equals("fs_list", StringComparison.OrdinalIgnoreCase) &&
+            !ToolArgumentReader.HasValue(decision.Arguments, "path"))
+        {
+            updates["path"] = ".";
+        }
+
+        if ((toolName.Equals("fs_read", StringComparison.OrdinalIgnoreCase) ||
+             toolName.Equals("fs_write", StringComparison.OrdinalIgnoreCase) ||
+             toolName.Equals("fs_patch", StringComparison.OrdinalIgnoreCase) ||
+             toolName.Equals("fs_delete", StringComparison.OrdinalIgnoreCase)) &&
+            !ToolArgumentReader.HasValue(decision.Arguments, "path"))
+        {
+            var allowNonExistingPath = toolName.Equals("fs_write", StringComparison.OrdinalIgnoreCase) ||
+                                       toolName.Equals("fs_patch", StringComparison.OrdinalIgnoreCase);
+            var preferFilePath = !toolName.Equals("fs_delete", StringComparison.OrdinalIgnoreCase);
+            if (TryInferPathFromContext(task, decision.Reason, workspaceRoot, pathHints, allowNonExistingPath, preferFilePath, out var inferredPath))
+            {
+                updates["path"] = inferredPath;
+            }
+        }
+
+        if (toolName.Equals("git_show", StringComparison.OrdinalIgnoreCase) &&
+            !ToolArgumentReader.HasValue(decision.Arguments, "ref"))
+        {
+            updates["ref"] = "HEAD";
+        }
+
+        if (toolName.Equals("git_add", StringComparison.OrdinalIgnoreCase) &&
+            !ToolArgumentReader.HasValue(decision.Arguments, "pathspec"))
+        {
+            updates["pathspec"] = ".";
+        }
+
+        if ((toolName.Equals("search_lexical", StringComparison.OrdinalIgnoreCase) ||
+             toolName.Equals("search_semantic", StringComparison.OrdinalIgnoreCase)) &&
+            !ToolArgumentReader.HasValue(decision.Arguments, "query"))
+        {
+            updates["query"] = BuildSeedSearchQuery(task);
+        }
+
+        if (toolName.Equals("search_semantic", StringComparison.OrdinalIgnoreCase) &&
+            !ToolArgumentReader.HasValue(decision.Arguments, "task") &&
+            !string.IsNullOrWhiteSpace(task))
+        {
+            updates["task"] = task;
+        }
+
+        if (updates.Count == 0)
+        {
+            repaired = decision;
+            repairNote = string.Empty;
+            return false;
+        }
+
+        var merged = MergeArguments(decision.Arguments, updates);
+        repaired = decision with { Arguments = merged };
+        repairNote = $"Auto-repaired arguments for '{toolName}': {string.Join(", ", updates.Keys)}.";
+        return true;
+    }
+
+    private static JsonElement MergeArguments(JsonElement source, IReadOnlyDictionary<string, object?> updates)
+    {
+        var map = new Dictionary<string, JsonElement>(StringComparer.OrdinalIgnoreCase);
+        if (source.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var property in source.EnumerateObject())
+            {
+                map[property.Name] = property.Value.Clone();
+            }
+        }
+
+        foreach (var update in updates)
+        {
+            map[update.Key] = JsonSerializer.SerializeToElement(update.Value);
+        }
+
+        var json = JsonSerializer.Serialize(map);
+        using var doc = JsonDocument.Parse(json);
+        return doc.RootElement.Clone();
+    }
+
+    private static void CapturePathHints(
+        List<string> pathHints,
+        string workspaceRoot,
+        string toolName,
+        JsonElement arguments,
+        ToolResult result)
+    {
+        var path = ToolArgumentReader.GetString(arguments, "path");
+        var allowMissingPath = toolName.Equals("fs_write", StringComparison.OrdinalIgnoreCase) ||
+                               toolName.Equals("fs_patch", StringComparison.OrdinalIgnoreCase);
+        TrackPathHint(pathHints, workspaceRoot, path, allowMissingPath);
+
+        var pathspec = ToolArgumentReader.GetString(arguments, "pathspec");
+        TrackPathHint(pathHints, workspaceRoot, pathspec, true);
+
+        if (!string.IsNullOrWhiteSpace(result.StdOut))
+        {
+            var lines = result.StdOut.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+            foreach (var line in lines.Take(100))
+            {
+                if ((toolName.Equals("search_lexical", StringComparison.OrdinalIgnoreCase) ||
+                     toolName.Equals("search_semantic", StringComparison.OrdinalIgnoreCase)) &&
+                    TryExtractSearchHitPath(line, out var searchPath))
+                {
+                    TrackPathHint(pathHints, workspaceRoot, searchPath, false);
+                    continue;
+                }
+
+                if (toolName.Equals("fs_list", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (line.StartsWith("[FILE] ", StringComparison.OrdinalIgnoreCase) ||
+                        line.StartsWith("[DIR] ", StringComparison.OrdinalIgnoreCase))
+                    {
+                        var candidate = line.StartsWith("[FILE] ", StringComparison.OrdinalIgnoreCase)
+                            ? line["[FILE] ".Length..].Trim()
+                            : line["[DIR] ".Length..].Trim();
+                        var markerIndex = candidate.IndexOf(" (", StringComparison.Ordinal);
+                        if (markerIndex > 0)
+                        {
+                            candidate = candidate[..markerIndex];
+                        }
+
+                        TrackPathHint(pathHints, workspaceRoot, candidate, false);
+                    }
+                }
+            }
+        }
+    }
+
+    private static void TrackPathHint(List<string> pathHints, string workspaceRoot, string? rawPath, bool allowNonExisting)
+    {
+        if (!TryNormalizePathCandidate(workspaceRoot, rawPath, allowNonExisting, preferFile: false, out var normalized))
+        {
+            return;
+        }
+
+        if (pathHints.Any(existing => existing.Equals(normalized, StringComparison.OrdinalIgnoreCase)))
+        {
+            return;
+        }
+
+        pathHints.Add(normalized);
+        if (pathHints.Count > 64)
+        {
+            pathHints.RemoveAt(0);
+        }
+    }
+
+    private static bool TryInferPathFromContext(
+        string task,
+        string reason,
+        string workspaceRoot,
+        IReadOnlyList<string> pathHints,
+        bool allowNonExisting,
+        bool preferFile,
+        out string path)
+    {
+        foreach (var text in new[] { reason, task })
+        {
+            foreach (var candidate in ExtractPathCandidatesFromText(text))
+            {
+                if (TryNormalizePathCandidate(workspaceRoot, candidate, allowNonExisting, preferFile, out path))
+                {
+                    return true;
+                }
+            }
+        }
+
+        for (var i = pathHints.Count - 1; i >= 0; i--)
+        {
+            if (TryNormalizePathCandidate(workspaceRoot, pathHints[i], allowNonExisting, preferFile, out path))
+            {
+                return true;
+            }
+        }
+
+        foreach (var text in new[] { reason, task })
+        {
+            foreach (Match match in Regex.Matches(text ?? string.Empty, @"\b([A-Za-z0-9_\-]+\.[A-Za-z0-9_]{1,12})\b"))
+            {
+                var fileName = match.Groups[1].Value;
+                if (TryFindUniqueFileByName(workspaceRoot, fileName, out path))
+                {
+                    return true;
+                }
+            }
+        }
+
+        path = string.Empty;
+        return false;
+    }
+
+    private static IEnumerable<string> ExtractPathCandidatesFromText(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            yield break;
+        }
+
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (Match match in Regex.Matches(text, "[`\"'](?<path>[^`\"'\\r\\n]{1,260})[`\"']"))
+        {
+            var candidate = match.Groups["path"].Value;
+            if (seen.Add(candidate))
+            {
+                yield return candidate;
+            }
+        }
+
+        foreach (Match match in Regex.Matches(text, @"(?<![\w/\\])(?<path>[A-Za-z0-9_\-./\\]{2,260}\.[A-Za-z0-9_\-]{1,12})(?![\w/\\])"))
+        {
+            var candidate = match.Groups["path"].Value;
+            if (seen.Add(candidate))
+            {
+                yield return candidate;
+            }
+        }
+    }
+
+    private static bool TryNormalizePathCandidate(
+        string workspaceRoot,
+        string? rawCandidate,
+        bool allowNonExisting,
+        bool preferFile,
+        out string normalized)
+    {
+        normalized = string.Empty;
+        if (string.IsNullOrWhiteSpace(rawCandidate))
+        {
+            return false;
+        }
+
+        var candidate = rawCandidate.Trim()
+            .Trim('"', '\'', '`')
+            .TrimEnd('.', ',', ';', ':', ')', ']', '}');
+
+        if (candidate.Length == 0 || candidate.Contains("://", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var lineSuffixed = Regex.Match(candidate, @"^(?<path>.+\.[A-Za-z0-9_]{1,12}):\d+$");
+        if (lineSuffixed.Success)
+        {
+            candidate = lineSuffixed.Groups["path"].Value;
+        }
+
+        if (candidate.Contains('\n') || candidate.Contains('\r'))
+        {
+            return false;
+        }
+
+        string absolute;
+        if (allowNonExisting)
+        {
+            var root = Path.GetFullPath(workspaceRoot);
+            absolute = Path.GetFullPath(Path.IsPathRooted(candidate) ? candidate : Path.Combine(root, candidate));
+            if (!PathSafety.IsWithinWorkspace(root, absolute))
+            {
+                return false;
+            }
+
+            if (preferFile &&
+                (candidate.EndsWith("/", StringComparison.Ordinal) || candidate.EndsWith("\\", StringComparison.Ordinal)))
+            {
+                return false;
+            }
+        }
+        else
+        {
+            try
+            {
+                absolute = PathSafety.ResolveInWorkspace(workspaceRoot, candidate);
+            }
+            catch
+            {
+                return false;
+            }
+
+            if (!File.Exists(absolute) && !Directory.Exists(absolute))
+            {
+                return false;
+            }
+
+            if (preferFile && Directory.Exists(absolute))
+            {
+                return false;
+            }
+        }
+
+        normalized = Path.GetRelativePath(workspaceRoot, absolute).Replace('\\', '/');
+        if (string.IsNullOrWhiteSpace(normalized))
+        {
+            normalized = ".";
+        }
+
+        if (preferFile && normalized == ".")
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    private static bool TryFindUniqueFileByName(string workspaceRoot, string fileName, out string path)
+    {
+        path = string.Empty;
+        if (string.IsNullOrWhiteSpace(fileName))
+        {
+            return false;
+        }
+
+        string? match = null;
+        foreach (var file in Directory.EnumerateFiles(workspaceRoot, "*", SearchOption.AllDirectories))
+        {
+            if (!Path.GetFileName(file).Equals(fileName, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var relative = Path.GetRelativePath(workspaceRoot, file).Replace('\\', '/');
+            if (ShouldSkipPathScan(relative))
+            {
+                continue;
+            }
+
+            if (match is not null)
+            {
+                return false;
+            }
+
+            match = relative;
+        }
+
+        if (match is null)
+        {
+            return false;
+        }
+
+        path = match;
+        return true;
+    }
+
+    private static bool ShouldSkipPathScan(string relativePath)
+    {
+        var rel = relativePath.Replace('\\', '/');
+        return rel.StartsWith(".git/", StringComparison.OrdinalIgnoreCase) ||
+               rel.StartsWith("bin/", StringComparison.OrdinalIgnoreCase) ||
+               rel.StartsWith("obj/", StringComparison.OrdinalIgnoreCase) ||
+               rel.StartsWith(".evoloop/", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool TryExtractSearchHitPath(string line, out string path)
+    {
+        var match = Regex.Match(line, @"^(?<path>.+?):\d+\s");
+        if (match.Success)
+        {
+            path = match.Groups["path"].Value.Trim();
+            return true;
+        }
+
+        path = string.Empty;
+        return false;
+    }
+
     private static bool TaskLikelyRequiresTools(string task)
     {
         if (string.IsNullOrWhiteSpace(task))
@@ -709,7 +1201,7 @@ public sealed class ReActAgentLoop : IAgentLoop
         int consecutiveInvalidResponses,
         string task)
     {
-        if (!requiresToolBeforeFinal || toolStepsExecuted > 0 || consecutiveInvalidResponses < 2)
+        if (!requiresToolBeforeFinal || toolStepsExecuted > 0 || consecutiveInvalidResponses < 1)
         {
             return null;
         }
@@ -811,7 +1303,10 @@ internal static class AgentDecisionParser
         using (document)
         {
             var root = document.RootElement;
-            if (TryParseToolCallVariants(root, out var variantDecision))
+            var allowedTools = toolNames is null
+                ? null
+                : new HashSet<string>(toolNames, StringComparer.OrdinalIgnoreCase);
+            if (TryParseToolCallVariants(root, allowedTools, out var variantDecision))
             {
                 return variantDecision;
             }
@@ -834,7 +1329,7 @@ internal static class AgentDecisionParser
                 "tool" => new AgentDecision(
                     AgentDecisionType.Tool,
                     root.TryGetProperty("tool", out var toolEl) ? toolEl.GetString() ?? string.Empty : string.Empty,
-                    root.TryGetProperty("arguments", out var argsEl) ? argsEl.Clone() : EmptyObject.RootElement.Clone(),
+                    root.TryGetProperty("arguments", out var argsEl) ? NormalizeArguments(argsEl) : EmptyObject.RootElement.Clone(),
                     root.TryGetProperty("reason", out var reasonEl) ? reasonEl.GetString() ?? string.Empty : string.Empty,
                     string.Empty),
                 _ => AgentDecision.Invalid("Unknown decision type.")
@@ -872,7 +1367,19 @@ internal static class AgentDecisionParser
         return false;
     }
 
-    private static bool TryParseToolCallVariants(JsonElement root, out AgentDecision decision)
+    private static bool TryParseToolCallVariants(
+        JsonElement root,
+        HashSet<string>? allowedTools,
+        out AgentDecision decision)
+    {
+        return TryParseToolCallVariants(root, allowedTools, 0, out decision);
+    }
+
+    private static bool TryParseToolCallVariants(
+        JsonElement root,
+        HashSet<string>? allowedTools,
+        int depth,
+        out AgentDecision decision)
     {
         if (root.ValueKind != JsonValueKind.Object)
         {
@@ -880,34 +1387,107 @@ internal static class AgentDecisionParser
             return false;
         }
 
-        if (root.TryGetProperty("tool", out var toolEl) && toolEl.ValueKind == JsonValueKind.String)
+        if (depth > 2)
         {
-            var normalizedArgs = root.TryGetProperty("arguments", out var argsEl) ? NormalizeArguments(argsEl) :
-                root.TryGetProperty("args", out var argsAltEl) ? NormalizeArguments(argsAltEl) :
-                EmptyObject.RootElement.Clone();
+            decision = AgentDecision.Invalid("Tool-call variant nesting too deep.");
+            return false;
+        }
 
-            decision = new AgentDecision(
-                AgentDecisionType.Tool,
-                toolEl.GetString() ?? string.Empty,
-                normalizedArgs,
-                root.TryGetProperty("reason", out var reasonEl) ? reasonEl.GetString() ?? "recovered tool decision" : "recovered tool decision",
-                string.Empty);
+        if (TryBuildToolDecision(root, "tool", allowedTools, out decision))
+        {
             return true;
         }
 
-        if (root.TryGetProperty("action", out var actionEl) && actionEl.ValueKind == JsonValueKind.String)
+        if (TryBuildToolDecision(root, "action", allowedTools, out decision))
         {
-            var normalizedArgs = root.TryGetProperty("action_input", out var actionInputEl) ? NormalizeArguments(actionInputEl) :
-                root.TryGetProperty("arguments", out var argsEl) ? NormalizeArguments(argsEl) :
-                EmptyObject.RootElement.Clone();
-
-            decision = new AgentDecision(
-                AgentDecisionType.Tool,
-                actionEl.GetString() ?? string.Empty,
-                normalizedArgs,
-                root.TryGetProperty("reason", out var reasonEl) ? reasonEl.GetString() ?? "recovered action decision" : "recovered action decision",
-                string.Empty);
             return true;
+        }
+
+        if (TryBuildToolDecision(root, "name", allowedTools, out decision))
+        {
+            return true;
+        }
+
+        if (root.TryGetProperty("function_call", out var functionCall) &&
+            functionCall.ValueKind == JsonValueKind.Object &&
+            TryBuildToolDecision(functionCall, "name", allowedTools, out decision))
+        {
+            return true;
+        }
+
+        if (root.TryGetProperty("tool_calls", out var toolCalls) &&
+            toolCalls.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var call in toolCalls.EnumerateArray())
+            {
+                if (call.ValueKind != JsonValueKind.Object)
+                {
+                    continue;
+                }
+
+                if (call.TryGetProperty("function", out var functionObj) &&
+                    functionObj.ValueKind == JsonValueKind.Object &&
+                    TryBuildToolDecision(functionObj, "name", allowedTools, out decision))
+                {
+                    return true;
+                }
+
+                if (TryBuildToolDecision(call, "name", allowedTools, out decision))
+                {
+                    return true;
+                }
+            }
+        }
+
+        if (root.TryGetProperty("type", out var typeEl) && typeEl.ValueKind == JsonValueKind.String)
+        {
+            var type = typeEl.GetString() ?? string.Empty;
+            if ((type.Equals("tool_call", StringComparison.OrdinalIgnoreCase) ||
+                 type.Equals("function_call", StringComparison.OrdinalIgnoreCase)) &&
+                TryBuildToolDecision(root, "name", allowedTools, out decision))
+            {
+                return true;
+            }
+        }
+
+        var nestedKeys = new[] { "decision", "response", "output", "result" };
+        foreach (var key in nestedKeys)
+        {
+            if (!root.TryGetProperty(key, out var nested))
+            {
+                continue;
+            }
+
+            if (nested.ValueKind == JsonValueKind.Object &&
+                TryParseToolCallVariants(nested, allowedTools, depth + 1, out decision))
+            {
+                return true;
+            }
+
+            if (nested.ValueKind == JsonValueKind.String &&
+                TryParseJson(nested.GetString() ?? string.Empty, out var nestedDoc))
+            {
+                using (nestedDoc)
+                {
+                    if (TryParseToolCallVariants(nestedDoc.RootElement, allowedTools, depth + 1, out decision))
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        if (root.TryGetProperty("content", out var contentEl) &&
+            contentEl.ValueKind == JsonValueKind.String &&
+            TryParseJson(contentEl.GetString() ?? string.Empty, out var contentDoc))
+        {
+            using (contentDoc)
+            {
+                if (TryParseToolCallVariants(contentDoc.RootElement, allowedTools, depth + 1, out decision))
+                {
+                    return true;
+                }
+            }
         }
 
         if (!root.TryGetProperty("type", out _) &&
@@ -920,6 +1500,54 @@ internal static class AgentDecisionParser
 
         decision = AgentDecision.Invalid("No known tool-call variant.");
         return false;
+    }
+
+    private static bool TryBuildToolDecision(
+        JsonElement root,
+        string key,
+        HashSet<string>? allowedTools,
+        out AgentDecision decision)
+    {
+        if (!root.TryGetProperty(key, out var toolEl) || toolEl.ValueKind != JsonValueKind.String)
+        {
+            decision = AgentDecision.Invalid("Tool key not found.");
+            return false;
+        }
+
+        var toolName = toolEl.GetString() ?? string.Empty;
+        if (allowedTools is not null && allowedTools.Count > 0 && !allowedTools.Contains(toolName))
+        {
+            decision = AgentDecision.Invalid("Tool name is not allowed.");
+            return false;
+        }
+
+        if (key.Equals("name", StringComparison.OrdinalIgnoreCase) &&
+            !root.TryGetProperty("arguments", out _) &&
+            !root.TryGetProperty("args", out _) &&
+            !root.TryGetProperty("action_input", out _) &&
+            !root.TryGetProperty("input", out _))
+        {
+            decision = AgentDecision.Invalid("Name key is not a tool call.");
+            return false;
+        }
+
+        var args = root.TryGetProperty("arguments", out var argsEl) ? NormalizeArguments(argsEl) :
+            root.TryGetProperty("args", out var argsAltEl) ? NormalizeArguments(argsAltEl) :
+            root.TryGetProperty("action_input", out var actionInputEl) ? NormalizeArguments(actionInputEl) :
+            root.TryGetProperty("input", out var inputEl) ? NormalizeArguments(inputEl) :
+            EmptyObject.RootElement.Clone();
+
+        var reason = root.TryGetProperty("reason", out var reasonEl) && reasonEl.ValueKind == JsonValueKind.String
+            ? reasonEl.GetString() ?? "recovered tool decision"
+            : "recovered tool decision";
+
+        decision = new AgentDecision(
+            AgentDecisionType.Tool,
+            toolName,
+            args,
+            reason,
+            string.Empty);
+        return true;
     }
 
     private static AgentDecision? TryParseFromText(string content, IEnumerable<string>? toolNames)
