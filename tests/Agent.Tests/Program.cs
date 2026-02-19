@@ -10,6 +10,8 @@ var tests = new List<(string Name, Func<Task> Run)>
 {
     ("Policy denies outside workspace", TestPolicyDeniesOutsideWorkspace),
     ("Policy requires approval for writes", TestPolicyRequiresApprovalForWrite),
+    ("Offline strict denies non-approved network shell", TestOfflineStrictDeniesNetworkShell),
+    ("Offline strict allows approved gateway host with approval", TestOfflineStrictAllowsApprovedHostWithApproval),
     ("ReAct loop handles final response", TestLoopFinalResponse),
     ("ReAct loop executes tool then final", TestLoopToolThenFinal),
     ("Fallback lexical search returns results", TestFallbackLexicalSearch)
@@ -85,6 +87,50 @@ static Task TestPolicyRequiresApprovalForWrite()
 
     var decision = policy.Evaluate(call, context);
     Assert(decision.Kind == PolicyDecisionKind.RequireApproval, "Expected approval requirement for fs_write.");
+    return Task.CompletedTask;
+}
+
+static Task TestOfflineStrictDeniesNetworkShell()
+{
+    var config = new AgentConfig
+    {
+        Api = new ApiConfig { BaseUrl = "https://gateway.company.local" },
+        Safety = new SafetyConfig
+        {
+            OfflineStrictMode = true,
+            AllowedNetworkHosts = new List<string> { "gateway.company.local" }
+        }
+    };
+
+    var policy = new DefaultPolicyEngine(config);
+    using var doc = JsonDocument.Parse("{\"command\":\"git push origin main\"}");
+    var call = new ToolCall("exec_shell", doc.RootElement.Clone(), "push");
+    var context = new ToolContext("/tmp/workspace", "s1", "reasoning", config, new NullSearchService());
+
+    var decision = policy.Evaluate(call, context);
+    Assert(decision.Kind == PolicyDecisionKind.Deny, "Expected deny for network shell command in offline strict mode.");
+    return Task.CompletedTask;
+}
+
+static Task TestOfflineStrictAllowsApprovedHostWithApproval()
+{
+    var config = new AgentConfig
+    {
+        Api = new ApiConfig { BaseUrl = "https://gateway.company.local" },
+        Safety = new SafetyConfig
+        {
+            OfflineStrictMode = true,
+            AllowedNetworkHosts = new List<string> { "gateway.company.local" }
+        }
+    };
+
+    var policy = new DefaultPolicyEngine(config);
+    using var doc = JsonDocument.Parse("{\"command\":\"curl https://gateway.company.local/health\"}");
+    var call = new ToolCall("exec_shell", doc.RootElement.Clone(), "healthcheck");
+    var context = new ToolContext("/tmp/workspace", "s1", "reasoning", config, new NullSearchService());
+
+    var decision = policy.Evaluate(call, context);
+    Assert(decision.Kind == PolicyDecisionKind.RequireApproval, "Expected approval requirement for approved gateway host command.");
     return Task.CompletedTask;
 }
 

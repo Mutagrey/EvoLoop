@@ -126,6 +126,35 @@ internal abstract class ModelClientBase : IModelClient
         return new StringContent(json, Encoding.UTF8, "application/json");
     }
 
+    protected void EnsureEndpointAllowed(Uri endpoint)
+    {
+        if (!Config.Safety.OfflineStrictMode)
+        {
+            return;
+        }
+
+        var allowedHosts = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        if (Uri.TryCreate(Config.Api.BaseUrl, UriKind.Absolute, out var baseUri) && !string.IsNullOrWhiteSpace(baseUri.Host))
+        {
+            allowedHosts.Add(baseUri.Host);
+        }
+
+        foreach (var host in Config.Safety.AllowedNetworkHosts)
+        {
+            if (!string.IsNullOrWhiteSpace(host))
+            {
+                allowedHosts.Add(host.Trim());
+            }
+        }
+
+        if (!allowedHosts.Contains(endpoint.Host))
+        {
+            throw new InvalidOperationException(
+                $"Offline strict mode blocked model request to host '{endpoint.Host}'. Allowed hosts: {string.Join(", ", allowedHosts)}");
+        }
+    }
+
     protected static int? TryReadUsageToken(JsonElement usageEl, string field)
     {
         if (usageEl.ValueKind == JsonValueKind.Object &&
@@ -150,6 +179,7 @@ internal sealed class OpenAiCompatibleClient : ModelClientBase
     protected override async Task<ModelTurnResult> CompleteCoreAsync(ModelTurnRequest request, CancellationToken ct)
     {
         var endpoint = new Uri(new Uri(Config.Api.BaseUrl), Config.Api.OpenAiCompatiblePath);
+        EnsureEndpointAllowed(endpoint);
         var payload = new
         {
             model = request.Model,
@@ -213,6 +243,7 @@ internal sealed class CustomGatewayClient : ModelClientBase
     protected override async Task<ModelTurnResult> CompleteCoreAsync(ModelTurnRequest request, CancellationToken ct)
     {
         var endpoint = new Uri(new Uri(Config.Api.BaseUrl), Config.Api.CustomPath);
+        EnsureEndpointAllowed(endpoint);
         var payload = new
         {
             model = request.Model,

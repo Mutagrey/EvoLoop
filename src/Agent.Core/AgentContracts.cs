@@ -230,6 +230,8 @@ public sealed class SafetyConfig
     public bool RequireApprovalForCommits { get; init; } = true;
     public bool RequireApprovalForRiskyShell { get; init; } = true;
     public bool DenyOutsideWorkspace { get; init; } = true;
+    public bool OfflineStrictMode { get; init; } = false;
+    public List<string> AllowedNetworkHosts { get; init; } = new();
     public List<string> DeniedShellPatterns { get; init; } = new()
     {
         "rm -rf /",

@@ -16,10 +16,15 @@ public static class Program
         {
             var command = CliArguments.Parse(args);
             var workspace = Path.GetFullPath(command.Workspace ?? Directory.GetCurrentDirectory());
-            var config = AgentConfigLoader.LoadOrCreate(command.ConfigPath);
+            var config = BuildEffectiveConfig(AgentConfigLoader.LoadOrCreate(command.ConfigPath), command);
 
             var useColor = command.NoColor ? false : config.Ui.UseColor;
             var renderer = new AnsiRenderer(useColor);
+
+            if (config.Safety.OfflineStrictMode)
+            {
+                renderer.WriteWarn("Offline strict mode is ON. Network shell commands are blocked except approved gateway hosts.");
+            }
 
             using var modelRouter = new ModelClientRouter(config);
             var searchService = new HybridSearchService(modelRouter, config, workspace);
@@ -65,6 +70,42 @@ public static class Program
         {
             Environment.SetEnvironmentVariable(key, value);
         }
+    }
+
+    private static AgentConfig BuildEffectiveConfig(AgentConfig loadedConfig, CliArguments command)
+    {
+        if (!command.OfflineStrict)
+        {
+            return loadedConfig;
+        }
+
+        var safety = loadedConfig.Safety;
+        var allowedHosts = new List<string>(safety.AllowedNetworkHosts);
+        if (Uri.TryCreate(loadedConfig.Api.BaseUrl, UriKind.Absolute, out var baseUri) &&
+            !string.IsNullOrWhiteSpace(baseUri.Host) &&
+            !allowedHosts.Contains(baseUri.Host, StringComparer.OrdinalIgnoreCase))
+        {
+            allowedHosts.Add(baseUri.Host);
+        }
+
+        return new AgentConfig
+        {
+            Api = loadedConfig.Api,
+            Models = loadedConfig.Models,
+            Workspace = loadedConfig.Workspace,
+            Runtime = loadedConfig.Runtime,
+            Ui = loadedConfig.Ui,
+            Safety = new SafetyConfig
+            {
+                RequireApprovalForWrites = safety.RequireApprovalForWrites,
+                RequireApprovalForCommits = safety.RequireApprovalForCommits,
+                RequireApprovalForRiskyShell = safety.RequireApprovalForRiskyShell,
+                DenyOutsideWorkspace = safety.DenyOutsideWorkspace,
+                OfflineStrictMode = true,
+                AllowedNetworkHosts = allowedHosts,
+                DeniedShellPatterns = safety.DeniedShellPatterns
+            }
+        };
     }
 
     private static async Task RunReplAsync(
@@ -164,7 +205,10 @@ public static class Program
             {
                 var configPath = AgentConfigLoader.GetDefaultConfigPath();
                 var models = string.Join(", ", config.Models.Keys.OrderBy(x => x));
-                renderer.WritePanel("Config", $"Path: {configPath}\nProfiles: {models}\nAPI URL: {config.Api.BaseUrl}");
+                var hosts = config.Safety.AllowedNetworkHosts.Count == 0 ? "<none>" : string.Join(", ", config.Safety.AllowedNetworkHosts);
+                renderer.WritePanel(
+                    "Config",
+                    $"Path: {configPath}\nProfiles: {models}\nAPI URL: {config.Api.BaseUrl}\nOfflineStrict: {config.Safety.OfflineStrictMode}\nAllowedHosts: {hosts}");
                 continue;
             }
 
@@ -221,6 +265,7 @@ internal sealed class CliArguments
     public string? Workspace { get; init; }
     public string? ConfigPath { get; init; }
     public bool NoColor { get; init; }
+    public bool OfflineStrict { get; init; }
 
     public static CliArguments Parse(string[] args)
     {
@@ -230,6 +275,7 @@ internal sealed class CliArguments
         string? workspace = null;
         string? configPath = null;
         var noColor = false;
+        var offlineStrict = false;
 
         var i = 0;
         if (args.Length > 0 && args[0].Equals("run", StringComparison.OrdinalIgnoreCase))
@@ -260,6 +306,9 @@ internal sealed class CliArguments
                 case "--no-color":
                     noColor = true;
                     break;
+                case "--offline-strict":
+                    offlineStrict = true;
+                    break;
                 default:
                     if (mode == CliMode.Run && task is null && !arg.StartsWith("--", StringComparison.Ordinal))
                     {
@@ -276,7 +325,8 @@ internal sealed class CliArguments
             Profile = profile,
             Workspace = workspace,
             ConfigPath = configPath,
-            NoColor = noColor
+            NoColor = noColor,
+            OfflineStrict = offlineStrict
         };
     }
 }
