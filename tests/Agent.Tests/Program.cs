@@ -13,6 +13,8 @@ var tests = new List<(string Name, Func<Task> Run)>
     ("Offline strict denies non-approved network shell", TestOfflineStrictDeniesNetworkShell),
     ("Offline strict allows approved gateway host with approval", TestOfflineStrictAllowsApprovedHostWithApproval),
     ("ReAct loop retries on non-json model output", TestLoopRetriesOnNonJsonOutput),
+    ("ReAct loop switches profile after invalid responses", TestLoopSwitchesProfileAfterInvalidResponses),
+    ("ReAct loop stops after repeated invalid output", TestLoopStopsAfterRepeatedInvalidOutput),
     ("ReAct loop handles final response", TestLoopFinalResponse),
     ("ReAct loop executes tool then final", TestLoopToolThenFinal),
     ("Fallback lexical search returns results", TestFallbackLexicalSearch)
@@ -180,6 +182,101 @@ static async Task TestLoopRetriesOnNonJsonOutput()
     Assert(result.StepTrace.Count == 1, "Expected one executed tool step after invalid response retry.");
 }
 
+static async Task TestLoopStopsAfterRepeatedInvalidOutput()
+{
+    var config = new AgentConfig
+    {
+        Runtime = new RuntimeConfig
+        {
+            MaxSteps = 10,
+            MaxInvalidModelResponses = 3,
+            MaxConsecutiveFinalWithoutTools = 3,
+            ToolTimeoutSeconds = 120,
+            MaxOutputBytes = 64 * 1024,
+            ModelMinOutputTokens = 256,
+            ModelMaxOutputTokens = 4096,
+            ModelMinTemperature = 0.0,
+            ModelMaxTemperature = 0.7,
+            LexicalSearchDefaultMaxResults = 20,
+            RerankCandidateLimit = 12
+        }
+    };
+
+    var responses = new Queue<ModelTurnResult>();
+    responses.Enqueue(new ModelTurnResult("plain response 1", "fake"));
+    responses.Enqueue(new ModelTurnResult("plain response 2", "fake"));
+    responses.Enqueue(new ModelTurnResult("plain response 3", "fake"));
+
+    var router = new FakeModelRouter(new FakeModelClient(responses), "fake");
+    var loop = new ReActAgentLoop(
+        router,
+        new ITool[] { new EchoTool() },
+        new DefaultPolicyEngine(config),
+        new AutoApproveService(true),
+        new InMemoryEventStore(),
+        new DefaultToolContextFactory(config, new NullSearchService()),
+        config);
+
+    var result = await loop.RunAsync(new AgentRunRequest("create file test.txt", Path.GetTempPath(), "reasoning", 10), CancellationToken.None);
+    Assert(!result.Success, "Expected failure after repeated invalid model output.");
+    Assert(result.FinalMessage.Contains("invalid model responses", StringComparison.OrdinalIgnoreCase), "Expected invalid-response stop message.");
+}
+
+static async Task TestLoopSwitchesProfileAfterInvalidResponses()
+{
+    var config = new AgentConfig
+    {
+        Models = new Dictionary<string, ModelProfileConfig>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["reasoning"] = new() { Provider = "custom", Model = "deepseek", Temperature = 0.1, MaxTokens = 1200 },
+            ["fallback"] = new() { Provider = "custom", Model = "glm", Temperature = 0.2, MaxTokens = 1200 }
+        },
+        Runtime = new RuntimeConfig
+        {
+            MaxSteps = 8,
+            MaxInvalidModelResponses = 4,
+            MaxConsecutiveFinalWithoutTools = 4,
+            InvalidResponsesBeforeProfileSwitch = 2,
+            FinalWithoutToolsBeforeProfileSwitch = 2,
+            ToolTimeoutSeconds = 120,
+            MaxOutputBytes = 64 * 1024,
+            ModelMinOutputTokens = 256,
+            ModelMaxOutputTokens = 4096,
+            ModelMinTemperature = 0.0,
+            ModelMaxTemperature = 0.7,
+            LexicalSearchDefaultMaxResults = 20,
+            RerankCandidateLimit = 12
+        }
+    };
+
+    var reasoningResponses = new Queue<ModelTurnResult>();
+    reasoningResponses.Enqueue(new ModelTurnResult("bad plain text", "reasoning"));
+    reasoningResponses.Enqueue(new ModelTurnResult("another bad plain text", "reasoning"));
+
+    var fallbackResponses = new Queue<ModelTurnResult>();
+    fallbackResponses.Enqueue(new ModelTurnResult("{\"type\":\"tool\",\"tool\":\"echo\",\"reason\":\"switch worked\",\"arguments\":{\"value\":\"ok\"}}", "fallback"));
+    fallbackResponses.Enqueue(new ModelTurnResult("{\"type\":\"final\",\"message\":\"done\"}", "fallback"));
+
+    var router = new MultiProfileModelRouter(new Dictionary<string, IModelClient>(StringComparer.OrdinalIgnoreCase)
+    {
+        ["reasoning"] = new FakeModelClient(reasoningResponses),
+        ["fallback"] = new FakeModelClient(fallbackResponses)
+    });
+
+    var loop = new ReActAgentLoop(
+        router,
+        new ITool[] { new EchoTool() },
+        new DefaultPolicyEngine(config),
+        new AutoApproveService(true),
+        new InMemoryEventStore(),
+        new DefaultToolContextFactory(config, new NullSearchService()),
+        config);
+
+    var result = await loop.RunAsync(new AgentRunRequest("create file a.txt", Path.GetTempPath(), "reasoning", 8), CancellationToken.None);
+    Assert(result.Success, "Expected success after profile switch.");
+    Assert(result.StepTrace.Count == 1, "Expected one tool call on fallback profile.");
+}
+
 static async Task TestLoopToolThenFinal()
 {
     var config = new AgentConfig();
@@ -272,6 +369,28 @@ internal sealed class FakeModelRouter : IModelClientRouter
     public IModelClient GetClient(string profileName) => _client;
 
     public string ResolveModelName(string profileName) => _model;
+}
+
+internal sealed class MultiProfileModelRouter : IModelClientRouter
+{
+    private readonly IReadOnlyDictionary<string, IModelClient> _clients;
+
+    public MultiProfileModelRouter(IReadOnlyDictionary<string, IModelClient> clients)
+    {
+        _clients = clients;
+    }
+
+    public IModelClient GetClient(string profileName)
+    {
+        if (_clients.TryGetValue(profileName, out var client))
+        {
+            return client;
+        }
+
+        throw new InvalidOperationException($"Missing test model client for profile '{profileName}'.");
+    }
+
+    public string ResolveModelName(string profileName) => profileName;
 }
 
 internal sealed class AutoApproveService : IApprovalService

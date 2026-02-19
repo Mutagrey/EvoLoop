@@ -434,6 +434,15 @@ internal sealed class SpinnerObserver : IAgentRunObserver, IDisposable
                 StopSpinner();
                 _renderer.WriteStatus("MODEL", "Decision ready", ConsoleColor.Blue);
                 break;
+            case AgentRunEventType.ModelProfileSwitched:
+                _renderer.WriteStatus("MODEL-SWITCH", evt.Message, ConsoleColor.Cyan);
+                break;
+            case AgentRunEventType.ModelResponseInvalid:
+                _renderer.WriteStatus("WARN", evt.Message, ConsoleColor.Yellow);
+                break;
+            case AgentRunEventType.FinalRejectedRequiresTool:
+                _renderer.WriteStatus("WARN", evt.Message, ConsoleColor.Yellow);
+                break;
             case AgentRunEventType.ToolDecision:
                 _renderer.WriteStatus("PLAN", $"Using {evt.ToolName}", ConsoleColor.Magenta);
                 break;

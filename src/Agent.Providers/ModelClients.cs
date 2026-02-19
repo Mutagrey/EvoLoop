@@ -216,6 +216,18 @@ internal abstract class ModelClientBase : IModelClient
 
         return $"{providerLabel} request failed ({(int)statusCode}) endpoint='{endpoint}'.{hint} Response: {raw}";
     }
+
+    protected static bool IsResponseFormatRejected(HttpStatusCode statusCode, string raw)
+    {
+        if (statusCode != HttpStatusCode.BadRequest && (int)statusCode != 422)
+        {
+            return false;
+        }
+
+        return raw.Contains("response_format", StringComparison.OrdinalIgnoreCase) ||
+               raw.Contains("json_schema", StringComparison.OrdinalIgnoreCase) ||
+               raw.Contains("json_object", StringComparison.OrdinalIgnoreCase);
+    }
 }
 
 internal sealed class OpenAiCompatibleClient : ModelClientBase
@@ -229,26 +241,20 @@ internal sealed class OpenAiCompatibleClient : ModelClientBase
     {
         var endpoint = BuildEndpoint(Config.Api.BaseUrl, Config.Api.OpenAiCompatiblePath);
         EnsureEndpointAllowed(endpoint);
-        var payload = new
-        {
-            model = request.Model,
-            stream = false,
-            temperature = request.Temperature,
-            max_tokens = request.MaxTokens,
-            messages = BuildMessages(request)
-        };
+        var useResponseFormat = Config.Api.PreferJsonResponseFormat;
+        var (statusCode, raw) = await SendOpenAiRequestAsync(endpoint, request, useResponseFormat, ct);
 
-        using var httpRequest = new HttpRequestMessage(HttpMethod.Post, endpoint)
+        if (!IsSuccessStatusCode(statusCode) &&
+            useResponseFormat &&
+            Config.Api.ResponseFormatFallbackWithoutJson &&
+            IsResponseFormatRejected(statusCode, raw))
         {
-            Content = JsonBody(payload)
-        };
+            (statusCode, raw) = await SendOpenAiRequestAsync(endpoint, request, false, ct);
+        }
 
-        using var response = await HttpClient.SendAsync(httpRequest, ct);
-        var raw = await response.Content.ReadAsStringAsync(ct);
-
-        if (!response.IsSuccessStatusCode)
+        if (!IsSuccessStatusCode(statusCode))
         {
-            throw new InvalidOperationException(BuildHttpError("OpenAI-compatible", response.StatusCode, endpoint, raw));
+            throw new InvalidOperationException(BuildHttpError("OpenAI-compatible", statusCode, endpoint, raw));
         }
 
         using var doc = JsonDocument.Parse(raw);
@@ -280,6 +286,38 @@ internal sealed class OpenAiCompatibleClient : ModelClientBase
         list.AddRange(request.Messages.Select(m => new { role = m.Role, content = m.Content }));
         return list;
     }
+
+    private async Task<(HttpStatusCode StatusCode, string Raw)> SendOpenAiRequestAsync(
+        Uri endpoint,
+        ModelTurnRequest request,
+        bool useResponseFormat,
+        CancellationToken ct)
+    {
+        var payload = new
+        {
+            model = request.Model,
+            stream = false,
+            temperature = request.Temperature,
+            max_tokens = request.MaxTokens,
+            messages = BuildMessages(request),
+            response_format = useResponseFormat ? new { type = "json_object" } : null
+        };
+
+        using var httpRequest = new HttpRequestMessage(HttpMethod.Post, endpoint)
+        {
+            Content = JsonBody(payload)
+        };
+
+        using var response = await HttpClient.SendAsync(httpRequest, ct);
+        var raw = await response.Content.ReadAsStringAsync(ct);
+        return (response.StatusCode, raw);
+    }
+
+    private static bool IsSuccessStatusCode(HttpStatusCode statusCode)
+    {
+        var code = (int)statusCode;
+        return code >= 200 && code <= 299;
+    }
 }
 
 internal sealed class CustomGatewayClient : ModelClientBase
@@ -293,28 +331,20 @@ internal sealed class CustomGatewayClient : ModelClientBase
     {
         var endpoint = BuildEndpoint(Config.Api.BaseUrl, Config.Api.CustomPath);
         EnsureEndpointAllowed(endpoint);
-        var payload = new
-        {
-            model = request.Model,
-            temperature = request.Temperature,
-            max_tokens = request.MaxTokens,
-            stream = false,
-            system_prompt = request.SystemPrompt,
-            messages = request.Messages.Select(m => new { role = m.Role, content = m.Content }).ToArray(),
-            metadata = request.Metadata
-        };
+        var useResponseFormat = Config.Api.PreferJsonResponseFormat;
+        var (statusCode, raw) = await SendCustomRequestAsync(endpoint, request, useResponseFormat, ct);
 
-        using var httpRequest = new HttpRequestMessage(HttpMethod.Post, endpoint)
+        if (!IsSuccessStatusCode(statusCode) &&
+            useResponseFormat &&
+            Config.Api.ResponseFormatFallbackWithoutJson &&
+            IsResponseFormatRejected(statusCode, raw))
         {
-            Content = JsonBody(payload)
-        };
+            (statusCode, raw) = await SendCustomRequestAsync(endpoint, request, false, ct);
+        }
 
-        using var response = await HttpClient.SendAsync(httpRequest, ct);
-        var raw = await response.Content.ReadAsStringAsync(ct);
-
-        if (!response.IsSuccessStatusCode)
+        if (!IsSuccessStatusCode(statusCode))
         {
-            throw new InvalidOperationException(BuildHttpError("Custom gateway", response.StatusCode, endpoint, raw));
+            throw new InvalidOperationException(BuildHttpError("Custom gateway", statusCode, endpoint, raw));
         }
 
         using var doc = JsonDocument.Parse(raw);
@@ -335,6 +365,40 @@ internal sealed class CustomGatewayClient : ModelClientBase
         }
 
         return new ModelTurnResult(content, model, prompt, completion, total, raw);
+    }
+
+    private async Task<(HttpStatusCode StatusCode, string Raw)> SendCustomRequestAsync(
+        Uri endpoint,
+        ModelTurnRequest request,
+        bool useResponseFormat,
+        CancellationToken ct)
+    {
+        var payload = new
+        {
+            model = request.Model,
+            temperature = request.Temperature,
+            max_tokens = request.MaxTokens,
+            stream = false,
+            system_prompt = request.SystemPrompt,
+            messages = request.Messages.Select(m => new { role = m.Role, content = m.Content }).ToArray(),
+            metadata = request.Metadata,
+            response_format = useResponseFormat ? new { type = "json_object" } : null
+        };
+
+        using var httpRequest = new HttpRequestMessage(HttpMethod.Post, endpoint)
+        {
+            Content = JsonBody(payload)
+        };
+
+        using var response = await HttpClient.SendAsync(httpRequest, ct);
+        var raw = await response.Content.ReadAsStringAsync(ct);
+        return (response.StatusCode, raw);
+    }
+
+    private static bool IsSuccessStatusCode(HttpStatusCode statusCode)
+    {
+        var code = (int)statusCode;
+        return code >= 200 && code <= 299;
     }
 
     private static string ExtractContent(JsonElement root)

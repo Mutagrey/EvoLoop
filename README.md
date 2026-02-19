@@ -60,6 +60,17 @@ Runtime safety boundaries (recommended):
 - `runtime.modelMaxOutputTokens: 4096`
 - `runtime.modelMinTemperature: 0.0`
 - `runtime.modelMaxTemperature: 0.7`
+- `runtime.maxInvalidModelResponses: 4`
+- `runtime.maxConsecutiveFinalWithoutTools: 4`
+- `runtime.invalidResponsesBeforeProfileSwitch: 2`
+- `runtime.finalWithoutToolsBeforeProfileSwitch: 2`
+
+Model output reliability controls:
+
+- `api.preferJsonResponseFormat: true`
+- `api.responseFormatFallbackWithoutJson: true`
+
+The agent will request JSON-formatted output from the model and fallback automatically if gateway does not support `response_format`.
 
 Auth options (either one):
 
@@ -188,6 +199,14 @@ Example combinations:
 - `/config`
 - `/approve` and `/deny` (informational; approvals are inline)
 - `/exit`
+
+If you see repeated `[MODEL] Decision ready` without tool actions, watch for `WARN` lines:
+
+- `Model response format invalid ...`
+- `Final rejected ... task requires tool actions first`
+- `MODEL-SWITCH ...` (agent automatically switched profile, e.g. `reasoning -> fallback -> fast`)
+
+The run now stops with a clear message once retry limits are hit (instead of looping silently).
 
 ## Tests
 

@@ -45,9 +45,12 @@ public sealed class ReActAgentLoop : IAgentLoop
             null,
             null), ct);
 
-        var context = _contextFactory.Create(request.WorkspaceRoot, session.SessionId, request.ProfileName);
-        var modelClient = _modelRouter.GetClient(request.ProfileName);
-        var modelName = _modelRouter.ResolveModelName(request.ProfileName);
+        var profilePlan = BuildProfilePlan(request.ProfileName);
+        var profileIndex = 0;
+        var currentProfileName = profilePlan[profileIndex];
+        var context = _contextFactory.Create(request.WorkspaceRoot, session.SessionId, currentProfileName);
+        var modelClient = _modelRouter.GetClient(currentProfileName);
+        var modelName = _modelRouter.ResolveModelName(currentProfileName);
 
         var history = new List<ModelMessage>
         {
@@ -55,6 +58,8 @@ public sealed class ReActAgentLoop : IAgentLoop
         };
         var requiresToolBeforeFinal = TaskLikelyRequiresTools(request.Task);
         var toolStepsExecuted = 0;
+        var consecutiveInvalidResponses = 0;
+        var consecutiveFinalWithoutTools = 0;
 
         string finalMessage = "Agent ended without final answer.";
         bool success = false;
@@ -66,16 +71,17 @@ public sealed class ReActAgentLoop : IAgentLoop
                 await observer.OnEventAsync(new AgentRunEvent(AgentRunEventType.ModelCallStarted, "Analyzing next action", step), ct);
 
                 var modelRequest = new ModelTurnRequest(
-                    request.ProfileName,
+                    currentProfileName,
                     modelName,
                     BuildSystemPrompt(_tools.Values),
                     history,
-                    GetTemperature(request.ProfileName),
-                    GetMaxTokens(request.ProfileName),
+                    GetTemperature(currentProfileName),
+                    GetMaxTokens(currentProfileName),
                     new Dictionary<string, string>
                     {
                         ["session_id"] = session.SessionId,
-                        ["step"] = step.ToString()
+                        ["step"] = step.ToString(),
+                        ["profile"] = currentProfileName
                     });
 
                 var modelResult = await modelClient.CompleteAsync(modelRequest, ct);
@@ -85,17 +91,75 @@ public sealed class ReActAgentLoop : IAgentLoop
                 var decision = AgentDecisionParser.Parse(modelResult.Content);
                 if (decision.Type == AgentDecisionType.Invalid)
                 {
+                    consecutiveInvalidResponses++;
+                    await observer.OnEventAsync(new AgentRunEvent(
+                        AgentRunEventType.ModelResponseInvalid,
+                        $"Model response format invalid at step {step}.",
+                        step), ct);
+
+                    if (consecutiveInvalidResponses >= GetSwitchThreshold(_config.Runtime.InvalidResponsesBeforeProfileSwitch) &&
+                        TrySwitchProfile(profilePlan, ref profileIndex, ref currentProfileName, ref modelClient, ref modelName, request.WorkspaceRoot, session.SessionId, ref context))
+                    {
+                        consecutiveInvalidResponses = 0;
+                        consecutiveFinalWithoutTools = 0;
+                        await observer.OnEventAsync(new AgentRunEvent(
+                            AgentRunEventType.ModelProfileSwitched,
+                            $"Switched model profile to '{currentProfileName}' after repeated invalid responses.",
+                            step), ct);
+                        history.Add(new ModelMessage("user", $"OBSERVATION: Profile switched to '{currentProfileName}'. Continue with strict JSON tool decisions."));
+                        continue;
+                    }
+
+                    if (consecutiveInvalidResponses >= _config.Runtime.MaxInvalidModelResponses)
+                    {
+                        finalMessage = $"Stopped after {consecutiveInvalidResponses} invalid model responses. Model must return strict JSON tool/final schema.";
+                        success = false;
+                        break;
+                    }
+
                     history.Add(new ModelMessage("assistant", modelResult.Content));
                     history.Add(new ModelMessage(
                         "user",
-                        "OBSERVATION: Response format invalid. Return strict JSON only and choose a tool call or final schema."));
+                        "OBSERVATION: Response format invalid. Return EXACTLY one JSON object using one of schemas: " +
+                        "{\"type\":\"tool\",\"tool\":\"...\",\"reason\":\"...\",\"arguments\":{...}} " +
+                        "or {\"type\":\"final\",\"message\":\"...\"} or {\"type\":\"clarify\",\"message\":\"...\"}."));
                     continue;
+                }
+                else
+                {
+                    consecutiveInvalidResponses = 0;
                 }
 
                 if (decision.Type == AgentDecisionType.Final)
                 {
                     if (requiresToolBeforeFinal && toolStepsExecuted == 0 && _tools.Count > 0)
                     {
+                        consecutiveFinalWithoutTools++;
+                        await observer.OnEventAsync(new AgentRunEvent(
+                            AgentRunEventType.FinalRejectedRequiresTool,
+                            $"Final rejected at step {step}: task requires tool actions first.",
+                            step), ct);
+
+                        if (consecutiveFinalWithoutTools >= GetSwitchThreshold(_config.Runtime.FinalWithoutToolsBeforeProfileSwitch) &&
+                            TrySwitchProfile(profilePlan, ref profileIndex, ref currentProfileName, ref modelClient, ref modelName, request.WorkspaceRoot, session.SessionId, ref context))
+                        {
+                            consecutiveInvalidResponses = 0;
+                            consecutiveFinalWithoutTools = 0;
+                            await observer.OnEventAsync(new AgentRunEvent(
+                                AgentRunEventType.ModelProfileSwitched,
+                                $"Switched model profile to '{currentProfileName}' after repeated final-without-tools replies.",
+                                step), ct);
+                            history.Add(new ModelMessage("user", $"OBSERVATION: Profile switched to '{currentProfileName}'. You must use tools for this task."));
+                            continue;
+                        }
+
+                        if (consecutiveFinalWithoutTools >= _config.Runtime.MaxConsecutiveFinalWithoutTools)
+                        {
+                            finalMessage = $"Stopped after {consecutiveFinalWithoutTools} final-only replies without any tool calls for an action-oriented task.";
+                            success = false;
+                            break;
+                        }
+
                         history.Add(new ModelMessage("assistant", modelResult.Content));
                         history.Add(new ModelMessage(
                             "user",
@@ -103,6 +167,7 @@ public sealed class ReActAgentLoop : IAgentLoop
                         continue;
                     }
 
+                    consecutiveFinalWithoutTools = 0;
                     finalMessage = decision.Message;
                     success = true;
                     break;
@@ -122,6 +187,8 @@ public sealed class ReActAgentLoop : IAgentLoop
                     history.Add(new ModelMessage("user", $"OBSERVATION: Unknown tool '{invalidTool}'. Use one of: {string.Join(", ", _tools.Keys.OrderBy(x => x))}."));
                     continue;
                 }
+
+                consecutiveFinalWithoutTools = 0;
 
                 await observer.OnEventAsync(new AgentRunEvent(
                     AgentRunEventType.ToolDecision,
@@ -310,18 +377,30 @@ public sealed class ReActAgentLoop : IAgentLoop
 
     private static string BuildSystemPrompt(IEnumerable<ITool> tools)
     {
+        var toolList = tools.OrderBy(t => t.Name, StringComparer.OrdinalIgnoreCase).ToList();
+        var hasFsList = toolList.Any(t => t.Name.Equals("fs_list", StringComparison.OrdinalIgnoreCase));
+        var hasGitStatus = toolList.Any(t => t.Name.Equals("git_status", StringComparison.OrdinalIgnoreCase));
+        var hasSearchLexical = toolList.Any(t => t.Name.Equals("search_lexical", StringComparison.OrdinalIgnoreCase));
+
         var sb = new StringBuilder();
         sb.AppendLine("You are EvoLoop Agent, a professional autonomous coding CLI engineer.");
         sb.AppendLine("Primary objective: complete the user's task by using tools and producing concrete workspace outcomes.");
         sb.AppendLine("Execution model: ReAct loop (analyze -> one tool call -> observe -> repeat).");
         sb.AppendLine("Output contract: return STRICT JSON only. No markdown, prose wrappers, or code fences.");
+        sb.AppendLine("The first non-whitespace character of your response MUST be '{' and the last MUST be '}'.");
+        sb.AppendLine("You are not a chat assistant in this step. You are a machine that emits only one JSON object.");
         sb.AppendLine("Decision schema:");
         sb.AppendLine("For tool call: {\"type\":\"tool\",\"tool\":\"tool_name\",\"reason\":\"why\",\"arguments\":{...}}");
         sb.AppendLine("For final response: {\"type\":\"final\",\"message\":\"...\"}");
         sb.AppendLine("For clarification request: {\"type\":\"clarify\",\"message\":\"...\"}");
+        sb.AppendLine("Formatting constraints:");
+        sb.AppendLine("- Exactly one JSON object.");
+        sb.AppendLine("- No extra keys outside schema unless needed for tool arguments.");
+        sb.AppendLine("- No comments. No trailing commas.");
+        sb.AppendLine("- Do not wrap JSON in markdown.");
         sb.AppendLine("Available tools:");
 
-        foreach (var tool in tools.OrderBy(t => t.Name, StringComparer.OrdinalIgnoreCase))
+        foreach (var tool in toolList)
         {
             sb.AppendLine($"- {tool.Name}: {tool.Schema.Description}");
             if (tool.Schema.RequiredFields.Count > 0)
@@ -335,9 +414,25 @@ public sealed class ReActAgentLoop : IAgentLoop
         sb.AppendLine("- Read before you write.");
         sb.AppendLine("- Keep steps minimal and deterministic.");
         sb.AppendLine("- Prefer direct file edits and concrete command execution over abstract advice.");
+        sb.AppendLine("- For action-oriented tasks (create/edit/delete/run/git), call a tool instead of responding with explanation.");
+        sb.AppendLine("- Do not return final until you have enough tool observations to justify completion.");
         sb.AppendLine("- If the task asks to inspect/change files, run commands, or use git, you MUST call tools before final.");
         sb.AppendLine("- Do not claim actions unless tool observations confirm them.");
         sb.AppendLine("- If task is done, return final.");
+        sb.AppendLine("Good decision examples:");
+        if (hasFsList)
+        {
+            sb.AppendLine("{\"type\":\"tool\",\"tool\":\"fs_list\",\"reason\":\"inspect workspace root before edits\",\"arguments\":{\"path\":\".\",\"recurse\":false,\"include_hidden\":false}}");
+        }
+        if (hasGitStatus)
+        {
+            sb.AppendLine("{\"type\":\"tool\",\"tool\":\"git_status\",\"reason\":\"check repository state before making changes\",\"arguments\":{}}");
+        }
+        if (hasSearchLexical)
+        {
+            sb.AppendLine("{\"type\":\"tool\",\"tool\":\"search_lexical\",\"reason\":\"locate relevant code before editing\",\"arguments\":{\"query\":\"target symbol\",\"max_results\":20}}");
+        }
+        sb.AppendLine("{\"type\":\"final\",\"message\":\"Completed requested changes and verified with tool outputs.\"}");
         return sb.ToString();
     }
 
@@ -402,6 +497,64 @@ public sealed class ReActAgentLoop : IAgentLoop
         };
 
         return keywords.Any(keyword => normalized.Contains(keyword, StringComparison.Ordinal));
+    }
+
+    private List<string> BuildProfilePlan(string requestedProfile)
+    {
+        var ordered = new List<string>();
+        void AddIfExists(string profile)
+        {
+            if (_config.Models.ContainsKey(profile) &&
+                !ordered.Contains(profile, StringComparer.OrdinalIgnoreCase))
+            {
+                ordered.Add(profile);
+            }
+        }
+
+        AddIfExists(requestedProfile);
+        AddIfExists("reasoning");
+        AddIfExists("fallback");
+        AddIfExists("fast");
+
+        foreach (var profile in _config.Models.Keys.OrderBy(x => x, StringComparer.OrdinalIgnoreCase))
+        {
+            AddIfExists(profile);
+        }
+
+        if (ordered.Count == 0)
+        {
+            throw new InvalidOperationException("No model profiles configured.");
+        }
+
+        return ordered;
+    }
+
+    private bool TrySwitchProfile(
+        IReadOnlyList<string> profilePlan,
+        ref int profileIndex,
+        ref string currentProfileName,
+        ref IModelClient modelClient,
+        ref string modelName,
+        string workspaceRoot,
+        string sessionId,
+        ref ToolContext context)
+    {
+        if (profileIndex + 1 >= profilePlan.Count)
+        {
+            return false;
+        }
+
+        profileIndex++;
+        currentProfileName = profilePlan[profileIndex];
+        modelClient = _modelRouter.GetClient(currentProfileName);
+        modelName = _modelRouter.ResolveModelName(currentProfileName);
+        context = _contextFactory.Create(workspaceRoot, sessionId, currentProfileName);
+        return true;
+    }
+
+    private static int GetSwitchThreshold(int rawThreshold)
+    {
+        return rawThreshold <= 0 ? 1 : rawThreshold;
     }
 }
 

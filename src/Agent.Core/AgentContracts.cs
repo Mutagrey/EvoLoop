@@ -134,6 +134,9 @@ public enum AgentRunEventType
     SessionStarted,
     ModelCallStarted,
     ModelCallCompleted,
+    ModelProfileSwitched,
+    ModelResponseInvalid,
+    FinalRejectedRequiresTool,
     ToolDecision,
     PolicyDenied,
     ApprovalRequired,
@@ -205,6 +208,8 @@ public sealed class ApiConfig
     public string BaseUrl { get; init; } = "http://localhost:8000";
     public string OpenAiCompatiblePath { get; init; } = "/v1/chat/completions";
     public string CustomPath { get; init; } = "/api/chat";
+    public bool PreferJsonResponseFormat { get; init; } = true;
+    public bool ResponseFormatFallbackWithoutJson { get; init; } = true;
     public string ApiKey { get; init; } = string.Empty;
     public string ApiKeyEnvVar { get; init; } = "EVOLOOP_API_KEY";
     public int TimeoutSeconds { get; init; } = 120;
@@ -250,6 +255,10 @@ public sealed class SafetyConfig
 public sealed class RuntimeConfig
 {
     public int MaxSteps { get; init; } = 30;
+    public int MaxInvalidModelResponses { get; init; } = 4;
+    public int MaxConsecutiveFinalWithoutTools { get; init; } = 4;
+    public int InvalidResponsesBeforeProfileSwitch { get; init; } = 2;
+    public int FinalWithoutToolsBeforeProfileSwitch { get; init; } = 2;
     public int ToolTimeoutSeconds { get; init; } = 120;
     public int MaxOutputBytes { get; init; } = 64 * 1024;
     public int ModelMinOutputTokens { get; init; } = 256;
