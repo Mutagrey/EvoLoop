@@ -5,6 +5,8 @@
     "customPath": "/api/chat",
     "preferJsonResponseFormat": true,
     "responseFormatFallbackWithoutJson": true,
+    "systemPromptMode": "user",
+    "systemPromptFallbackToUserMessage": true,
     "apiKey": "",
     "apiKeyEnvVar": "EVOLOOP_API_KEY",
     "timeoutSeconds": 120,

@@ -228,6 +228,67 @@ internal abstract class ModelClientBase : IModelClient
                raw.Contains("json_schema", StringComparison.OrdinalIgnoreCase) ||
                raw.Contains("json_object", StringComparison.OrdinalIgnoreCase);
     }
+
+    protected bool ShouldFallbackSystemPromptToUserMessage(SystemPromptDeliveryMode mode)
+    {
+        return mode != SystemPromptDeliveryMode.UserMessage && Config.Api.SystemPromptFallbackToUserMessage;
+    }
+
+    protected SystemPromptDeliveryMode ResolveSystemPromptMode()
+    {
+        var raw = Config.Api.SystemPromptMode?.Trim().ToLowerInvariant();
+        return raw switch
+        {
+            "user" => SystemPromptDeliveryMode.UserMessage,
+            "message" => SystemPromptDeliveryMode.UserMessage,
+            "messages" => SystemPromptDeliveryMode.UserMessage,
+            "both" => SystemPromptDeliveryMode.Both,
+            _ => SystemPromptDeliveryMode.System
+        };
+    }
+
+    protected static bool IsSystemPromptRejected(HttpStatusCode statusCode, string raw)
+    {
+        if (statusCode != HttpStatusCode.BadRequest && (int)statusCode != 422)
+        {
+            return false;
+        }
+
+        if (raw.Contains("system_prompt", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        if (raw.Contains("unsupported", StringComparison.OrdinalIgnoreCase) &&
+            raw.Contains("system", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        if (raw.Contains("role", StringComparison.OrdinalIgnoreCase) &&
+            raw.Contains("system", StringComparison.OrdinalIgnoreCase) &&
+            raw.Contains("must", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return raw.Contains("unknown field", StringComparison.OrdinalIgnoreCase) &&
+               raw.Contains("system", StringComparison.OrdinalIgnoreCase);
+    }
+
+    protected static string BuildSystemPromptAsUserMessage(string systemPrompt)
+    {
+        return "SYSTEM INSTRUCTIONS (obey as highest-priority policy):\n" +
+               systemPrompt +
+               "\n\nContinue with the normal conversation and tool-decision task.";
+    }
+}
+
+internal enum SystemPromptDeliveryMode
+{
+    System,
+    UserMessage,
+    Both
 }
 
 internal sealed class OpenAiCompatibleClient : ModelClientBase
@@ -241,16 +302,8 @@ internal sealed class OpenAiCompatibleClient : ModelClientBase
     {
         var endpoint = BuildEndpoint(Config.Api.BaseUrl, Config.Api.OpenAiCompatiblePath);
         EnsureEndpointAllowed(endpoint);
-        var useResponseFormat = Config.Api.PreferJsonResponseFormat;
-        var (statusCode, raw) = await SendOpenAiRequestAsync(endpoint, request, useResponseFormat, ct);
-
-        if (!IsSuccessStatusCode(statusCode) &&
-            useResponseFormat &&
-            Config.Api.ResponseFormatFallbackWithoutJson &&
-            IsResponseFormatRejected(statusCode, raw))
-        {
-            (statusCode, raw) = await SendOpenAiRequestAsync(endpoint, request, false, ct);
-        }
+        var initialMode = ResolveSystemPromptMode();
+        var (statusCode, raw) = await SendWithPromptFallbackAsync(endpoint, request, initialMode, ct);
 
         if (!IsSuccessStatusCode(statusCode))
         {
@@ -276,12 +329,54 @@ internal sealed class OpenAiCompatibleClient : ModelClientBase
         return new ModelTurnResult(content, model, prompt, completion, total, raw);
     }
 
-    private static List<object> BuildMessages(ModelTurnRequest request)
+    private async Task<(HttpStatusCode StatusCode, string Raw)> SendWithPromptFallbackAsync(
+        Uri endpoint,
+        ModelTurnRequest request,
+        SystemPromptDeliveryMode initialMode,
+        CancellationToken ct)
     {
-        var list = new List<object>
+        var (statusCode, raw) = await SendWithResponseFormatFallbackAsync(endpoint, request, initialMode, ct);
+        if (!IsSuccessStatusCode(statusCode) &&
+            ShouldFallbackSystemPromptToUserMessage(initialMode) &&
+            IsSystemPromptRejected(statusCode, raw))
         {
-            new { role = "system", content = request.SystemPrompt }
-        };
+            (statusCode, raw) = await SendWithResponseFormatFallbackAsync(endpoint, request, SystemPromptDeliveryMode.UserMessage, ct);
+        }
+
+        return (statusCode, raw);
+    }
+
+    private async Task<(HttpStatusCode StatusCode, string Raw)> SendWithResponseFormatFallbackAsync(
+        Uri endpoint,
+        ModelTurnRequest request,
+        SystemPromptDeliveryMode mode,
+        CancellationToken ct)
+    {
+        var useResponseFormat = Config.Api.PreferJsonResponseFormat;
+        var (statusCode, raw) = await SendOpenAiRequestAsync(endpoint, request, useResponseFormat, mode, ct);
+        if (!IsSuccessStatusCode(statusCode) &&
+            useResponseFormat &&
+            Config.Api.ResponseFormatFallbackWithoutJson &&
+            IsResponseFormatRejected(statusCode, raw))
+        {
+            (statusCode, raw) = await SendOpenAiRequestAsync(endpoint, request, false, mode, ct);
+        }
+
+        return (statusCode, raw);
+    }
+
+    private static List<object> BuildMessages(ModelTurnRequest request, SystemPromptDeliveryMode mode)
+    {
+        var list = new List<object>();
+        if (mode == SystemPromptDeliveryMode.System || mode == SystemPromptDeliveryMode.Both)
+        {
+            list.Add(new { role = "system", content = request.SystemPrompt });
+        }
+
+        if (mode == SystemPromptDeliveryMode.UserMessage || mode == SystemPromptDeliveryMode.Both)
+        {
+            list.Add(new { role = "user", content = BuildSystemPromptAsUserMessage(request.SystemPrompt) });
+        }
 
         list.AddRange(request.Messages.Select(m => new { role = m.Role, content = m.Content }));
         return list;
@@ -291,6 +386,7 @@ internal sealed class OpenAiCompatibleClient : ModelClientBase
         Uri endpoint,
         ModelTurnRequest request,
         bool useResponseFormat,
+        SystemPromptDeliveryMode mode,
         CancellationToken ct)
     {
         var payload = new
@@ -299,7 +395,7 @@ internal sealed class OpenAiCompatibleClient : ModelClientBase
             stream = false,
             temperature = request.Temperature,
             max_tokens = request.MaxTokens,
-            messages = BuildMessages(request),
+            messages = BuildMessages(request, mode),
             response_format = useResponseFormat ? new { type = "json_object" } : null
         };
 
@@ -331,16 +427,8 @@ internal sealed class CustomGatewayClient : ModelClientBase
     {
         var endpoint = BuildEndpoint(Config.Api.BaseUrl, Config.Api.CustomPath);
         EnsureEndpointAllowed(endpoint);
-        var useResponseFormat = Config.Api.PreferJsonResponseFormat;
-        var (statusCode, raw) = await SendCustomRequestAsync(endpoint, request, useResponseFormat, ct);
-
-        if (!IsSuccessStatusCode(statusCode) &&
-            useResponseFormat &&
-            Config.Api.ResponseFormatFallbackWithoutJson &&
-            IsResponseFormatRejected(statusCode, raw))
-        {
-            (statusCode, raw) = await SendCustomRequestAsync(endpoint, request, false, ct);
-        }
+        var initialMode = ResolveSystemPromptMode();
+        var (statusCode, raw) = await SendWithPromptFallbackAsync(endpoint, request, initialMode, ct);
 
         if (!IsSuccessStatusCode(statusCode))
         {
@@ -367,20 +455,59 @@ internal sealed class CustomGatewayClient : ModelClientBase
         return new ModelTurnResult(content, model, prompt, completion, total, raw);
     }
 
+    private async Task<(HttpStatusCode StatusCode, string Raw)> SendWithPromptFallbackAsync(
+        Uri endpoint,
+        ModelTurnRequest request,
+        SystemPromptDeliveryMode initialMode,
+        CancellationToken ct)
+    {
+        var (statusCode, raw) = await SendWithResponseFormatFallbackAsync(endpoint, request, initialMode, ct);
+        if (!IsSuccessStatusCode(statusCode) &&
+            ShouldFallbackSystemPromptToUserMessage(initialMode) &&
+            IsSystemPromptRejected(statusCode, raw))
+        {
+            (statusCode, raw) = await SendWithResponseFormatFallbackAsync(endpoint, request, SystemPromptDeliveryMode.UserMessage, ct);
+        }
+
+        return (statusCode, raw);
+    }
+
+    private async Task<(HttpStatusCode StatusCode, string Raw)> SendWithResponseFormatFallbackAsync(
+        Uri endpoint,
+        ModelTurnRequest request,
+        SystemPromptDeliveryMode mode,
+        CancellationToken ct)
+    {
+        var useResponseFormat = Config.Api.PreferJsonResponseFormat;
+        var (statusCode, raw) = await SendCustomRequestAsync(endpoint, request, useResponseFormat, mode, ct);
+        if (!IsSuccessStatusCode(statusCode) &&
+            useResponseFormat &&
+            Config.Api.ResponseFormatFallbackWithoutJson &&
+            IsResponseFormatRejected(statusCode, raw))
+        {
+            (statusCode, raw) = await SendCustomRequestAsync(endpoint, request, false, mode, ct);
+        }
+
+        return (statusCode, raw);
+    }
+
     private async Task<(HttpStatusCode StatusCode, string Raw)> SendCustomRequestAsync(
         Uri endpoint,
         ModelTurnRequest request,
         bool useResponseFormat,
+        SystemPromptDeliveryMode mode,
         CancellationToken ct)
     {
+        var systemPrompt = mode == SystemPromptDeliveryMode.UserMessage ? null : request.SystemPrompt;
+        var messages = BuildMessages(request, mode);
         var payload = new
         {
             model = request.Model,
             temperature = request.Temperature,
             max_tokens = request.MaxTokens,
             stream = false,
-            system_prompt = request.SystemPrompt,
-            messages = request.Messages.Select(m => new { role = m.Role, content = m.Content }).ToArray(),
+            system_prompt = systemPrompt,
+            messages = messages,
             metadata = request.Metadata,
             response_format = useResponseFormat ? new { type = "json_object" } : null
         };
@@ -393,6 +520,18 @@ internal sealed class CustomGatewayClient : ModelClientBase
         using var response = await HttpClient.SendAsync(httpRequest, ct);
         var raw = await response.Content.ReadAsStringAsync(ct);
         return (response.StatusCode, raw);
+    }
+
+    private static object[] BuildMessages(ModelTurnRequest request, SystemPromptDeliveryMode mode)
+    {
+        var list = new List<object>();
+        if (mode == SystemPromptDeliveryMode.UserMessage || mode == SystemPromptDeliveryMode.Both)
+        {
+            list.Add(new { role = "user", content = BuildSystemPromptAsUserMessage(request.SystemPrompt) });
+        }
+
+        list.AddRange(request.Messages.Select(m => new { role = m.Role, content = m.Content }));
+        return list.ToArray();
     }
 
     private static bool IsSuccessStatusCode(HttpStatusCode statusCode)

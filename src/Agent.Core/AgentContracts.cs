@@ -211,6 +211,8 @@ public sealed class ApiConfig
     public string CustomPath { get; init; } = "/api/chat";
     public bool PreferJsonResponseFormat { get; init; } = true;
     public bool ResponseFormatFallbackWithoutJson { get; init; } = true;
+    public string SystemPromptMode { get; init; } = "user";
+    public bool SystemPromptFallbackToUserMessage { get; init; } = true;
     public string ApiKey { get; init; } = string.Empty;
     public string ApiKeyEnvVar { get; init; } = "EVOLOOP_API_KEY";
     public int TimeoutSeconds { get; init; } = 120;

@@ -72,8 +72,11 @@ Model output reliability controls:
 
 - `api.preferJsonResponseFormat: true`
 - `api.responseFormatFallbackWithoutJson: true`
+- `api.systemPromptMode: "user"` (`system` | `user` | `both`)
+- `api.systemPromptFallbackToUserMessage: true`
 
 The agent will request JSON-formatted output from the model and fallback automatically if gateway does not support `response_format`.
+Default mode is `user` because many gateways ignore/deprioritize `system`. If gateway supports strict system role well, you can switch to `system` or `both`.
 
 Auth options (either one):
 
@@ -106,6 +109,17 @@ Config file example (without env var):
 {
   "api": {
     "apiKey": "your_token_here"
+  }
+}
+```
+
+If your existing config still uses `system`, force recommended `user` mode:
+
+```json
+{
+  "api": {
+    "systemPromptMode": "user",
+    "systemPromptFallbackToUserMessage": true
   }
 }
 ```
