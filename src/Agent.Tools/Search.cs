@@ -1,12 +1,14 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Agent.Core;
 
 namespace Agent.Tools;
 
 public sealed class HybridSearchService : ISearchService
 {
+    private static readonly Regex RipGrepLineRegex = new(@"^(.*?):(\d+):(.*)$", RegexOptions.Compiled);
     private readonly IModelClientRouter _modelRouter;
     private readonly AgentConfig _config;
     private readonly RerankCache _cache;
@@ -103,23 +105,7 @@ public sealed class HybridSearchService : ISearchService
 
         foreach (var line in lines)
         {
-            var first = line.IndexOf(':');
-            if (first <= 0)
-            {
-                continue;
-            }
-
-            var second = line.IndexOf(':', first + 1);
-            if (second <= first + 1)
-            {
-                continue;
-            }
-
-            var path = line[..first];
-            var lineNoText = line[(first + 1)..second];
-            var snippet = line[(second + 1)..];
-
-            if (!int.TryParse(lineNoText, out var lineNo))
+            if (!TryParseRipGrepLine(line, out var path, out var lineNo, out var snippet))
             {
                 continue;
             }
@@ -136,6 +122,23 @@ public sealed class HybridSearchService : ISearchService
             .OrderByDescending(x => x.LexicalScore)
             .Take(query.MaxResults)
             .ToList();
+    }
+
+    private static bool TryParseRipGrepLine(string line, out string path, out int lineNo, out string snippet)
+    {
+        path = string.Empty;
+        lineNo = 0;
+        snippet = string.Empty;
+
+        var match = RipGrepLineRegex.Match(line);
+        if (!match.Success)
+        {
+            return false;
+        }
+
+        path = match.Groups[1].Value;
+        snippet = match.Groups[3].Value;
+        return int.TryParse(match.Groups[2].Value, out lineNo);
     }
 
     private static async Task<IReadOnlyList<SearchHit>> SearchWithFallbackScannerAsync(SearchQuery query, CancellationToken ct)

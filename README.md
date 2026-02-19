@@ -6,7 +6,10 @@ Production-oriented autonomous coding agent CLI in pure C# (`.NET 9`) with no th
 
 - ReAct loop (`analyze -> tool -> observe -> repeat`)
 - Guarded autonomy with approval gates for risky actions
+- Workspace boundary hardening (path traversal and sibling-prefix bypass protection)
+- Destructive shell patterns blocked by default (`rm -rf`, `git reset --hard`, etc.)
 - Tooling for files, git, shell, lexical search, semantic-like reranking
+- Live step feed (`PLAN` / `RUN` / `RESULT`) and post-run activity panel (`Edited` / `Explored` / `Ran`)
 - Non-streaming model API support (Qwen, DeepSeek, GLM profiles)
 - Portable/no-admin friendly usage
 - Telemetry hard-disabled for dotnet CLI child processes
@@ -200,13 +203,23 @@ Example combinations:
 - `/approve` and `/deny` (informational; approvals are inline)
 - `/exit`
 
+During run, CLI now shows:
+
+- `MODEL`: current step/model analysis
+- `PLAN`: what model is going to do next (tool + reason + args preview)
+- `RUN`: exact action being executed
+- `RESULT`: tool outcome in human-readable form
+- `Activity` panel after run: `Edited` / `Explored` / `Ran` timeline (with `+/-` when available via `git diff --numstat`)
+
 If you see repeated `[MODEL] Decision ready` without tool actions, watch for `WARN` lines:
 
 - `Model response format invalid ...`
 - `Final rejected ... task requires tool actions first`
 - `MODEL-SWITCH ...` (agent automatically switched profile, e.g. `reasoning -> fallback -> fast`)
+- `RECOVER ...` (agent recovered a valid tool decision from malformed/plain-text output)
 
 The run now stops with a clear message once retry limits are hit (instead of looping silently).
+Unknown tool loops are treated as invalid model decisions and are now auto-stopped/profile-switched by the same guardrails.
 
 ## Tests
 

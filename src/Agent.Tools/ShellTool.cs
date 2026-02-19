@@ -25,9 +25,17 @@ public sealed class ExecShellTool : ITool
         }
 
         var cwdArg = ToolArgumentReader.GetString(call.Arguments, "cwd");
-        var workingDirectory = string.IsNullOrWhiteSpace(cwdArg)
-            ? context.WorkspaceRoot
-            : ToolPath.ResolveInWorkspace(context.WorkspaceRoot, cwdArg);
+        string workingDirectory;
+        try
+        {
+            workingDirectory = string.IsNullOrWhiteSpace(cwdArg)
+                ? context.WorkspaceRoot
+                : ToolPath.ResolveInWorkspace(context.WorkspaceRoot, cwdArg);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return new ToolResult(false, ex.Message);
+        }
 
         if (!Directory.Exists(workingDirectory))
         {

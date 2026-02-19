@@ -135,6 +135,7 @@ public enum AgentRunEventType
     ModelCallStarted,
     ModelCallCompleted,
     ModelProfileSwitched,
+    ModelDecisionRecovered,
     ModelResponseInvalid,
     FinalRejectedRequiresTool,
     ToolDecision,
@@ -241,10 +242,15 @@ public sealed class SafetyConfig
     public List<string> DeniedShellPatterns { get; init; } = new()
     {
         "rm -rf /",
+        "rm -rf",
+        "del /f /s /q",
+        "rmdir /s /q",
         "mkfs",
         "dd if=",
         "shutdown",
         "reboot",
+        "git reset --hard",
+        "git clean -fd",
         "curl",
         "wget",
         "scp",

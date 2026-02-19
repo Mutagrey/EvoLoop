@@ -17,8 +17,7 @@ public sealed class DefaultPolicyEngine : IPolicyEngine
     {
         if (_config.Safety.DenyOutsideWorkspace)
         {
-            var path = ExtractPath(call.Arguments);
-            if (!string.IsNullOrWhiteSpace(path) && IsOutsideWorkspace(path, context.WorkspaceRoot))
+            if (HasPathOutsideWorkspace(call, context.WorkspaceRoot))
             {
                 return new PolicyDecision(PolicyDecisionKind.Deny, "Path is outside workspace root.");
             }
@@ -78,13 +77,44 @@ public sealed class DefaultPolicyEngine : IPolicyEngine
         return new PolicyDecision(PolicyDecisionKind.Allow, "Allowed by default policy.");
     }
 
-    private static string? ExtractPath(JsonElement args)
+    private static bool HasPathOutsideWorkspace(ToolCall call, string workspaceRoot)
+    {
+        var paths = new List<string?>(2)
+        {
+            ExtractStringArg(call.Arguments, "path")
+        };
+
+        if (call.Name.Equals("exec_shell", StringComparison.OrdinalIgnoreCase))
+        {
+            paths.Add(ExtractStringArg(call.Arguments, "cwd"));
+        }
+
+        foreach (var rawPath in paths)
+        {
+            if (string.IsNullOrWhiteSpace(rawPath))
+            {
+                continue;
+            }
+
+            var resolved = Path.GetFullPath(Path.IsPathRooted(rawPath)
+                ? rawPath
+                : Path.Combine(workspaceRoot, rawPath));
+            if (!PathSafety.IsWithinWorkspace(workspaceRoot, resolved))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static string? ExtractStringArg(JsonElement args, string name)
     {
         if (args.ValueKind == JsonValueKind.Object &&
-            args.TryGetProperty("path", out var pathEl) &&
-            pathEl.ValueKind == JsonValueKind.String)
+            args.TryGetProperty(name, out var valueEl) &&
+            valueEl.ValueKind == JsonValueKind.String)
         {
-            return pathEl.GetString();
+            return valueEl.GetString();
         }
 
         return null;
@@ -100,13 +130,6 @@ public sealed class DefaultPolicyEngine : IPolicyEngine
         }
 
         return null;
-    }
-
-    private static bool IsOutsideWorkspace(string rawPath, string workspace)
-    {
-        var resolvedPath = Path.GetFullPath(Path.IsPathRooted(rawPath) ? rawPath : Path.Combine(workspace, rawPath));
-        var resolvedWorkspace = Path.GetFullPath(workspace);
-        return !resolvedPath.StartsWith(resolvedWorkspace, StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool IsRiskyShell(string command)

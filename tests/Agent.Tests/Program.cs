@@ -9,12 +9,17 @@ AssemblyLoadContext.Default.Resolving += ResolveFromOutput;
 var tests = new List<(string Name, Func<Task> Run)>
 {
     ("Policy denies outside workspace", TestPolicyDeniesOutsideWorkspace),
+    ("Policy denies sibling path prefix bypass", TestPolicyDeniesSiblingPrefixBypass),
+    ("Policy denies exec_shell cwd outside workspace", TestPolicyDeniesExecShellCwdOutsideWorkspace),
+    ("Policy denies destructive shell patterns", TestPolicyDeniesDestructiveShellPatterns),
     ("Policy requires approval for writes", TestPolicyRequiresApprovalForWrite),
     ("Offline strict denies non-approved network shell", TestOfflineStrictDeniesNetworkShell),
     ("Offline strict allows approved gateway host with approval", TestOfflineStrictAllowsApprovedHostWithApproval),
     ("ReAct loop retries on non-json model output", TestLoopRetriesOnNonJsonOutput),
+    ("ReAct loop recovers tool call from plain text action output", TestLoopRecoversToolCallFromPlainText),
     ("ReAct loop switches profile after invalid responses", TestLoopSwitchesProfileAfterInvalidResponses),
     ("ReAct loop stops after repeated invalid output", TestLoopStopsAfterRepeatedInvalidOutput),
+    ("ReAct loop stops after repeated unknown tool output", TestLoopStopsAfterRepeatedUnknownToolOutput),
     ("ReAct loop handles final response", TestLoopFinalResponse),
     ("ReAct loop executes tool then final", TestLoopToolThenFinal),
     ("Fallback lexical search returns results", TestFallbackLexicalSearch)
@@ -71,6 +76,88 @@ static Task TestPolicyDeniesOutsideWorkspace()
 
     var decision = policy.Evaluate(call, context);
     Assert(decision.Kind == PolicyDecisionKind.Deny, "Expected deny decision for outside workspace path.");
+    return Task.CompletedTask;
+}
+
+static Task TestPolicyDeniesSiblingPrefixBypass()
+{
+    var baseDir = Path.Combine(Path.GetTempPath(), "agent-policy-" + Guid.NewGuid().ToString("n"));
+    var workspace = Path.Combine(baseDir, "repo");
+    var sibling = Path.Combine(baseDir, "repo-evil");
+    Directory.CreateDirectory(workspace);
+    Directory.CreateDirectory(sibling);
+
+    try
+    {
+        var config = new AgentConfig();
+        var policy = new DefaultPolicyEngine(config);
+        var outsidePath = Path.Combine(sibling, "leak.txt");
+        using var doc = JsonDocument.Parse($"{{\"path\":{JsonSerializer.Serialize(outsidePath)}}}");
+        var call = new ToolCall("fs_read", doc.RootElement.Clone(), "test");
+        var context = new ToolContext(
+            WorkspaceRoot: workspace,
+            SessionId: "s1",
+            ProfileName: "reasoning",
+            Config: config,
+            SearchService: new NullSearchService());
+
+        var decision = policy.Evaluate(call, context);
+        Assert(decision.Kind == PolicyDecisionKind.Deny, "Expected deny decision for sibling-prefix outside workspace path.");
+        return Task.CompletedTask;
+    }
+    finally
+    {
+        if (Directory.Exists(baseDir))
+        {
+            Directory.Delete(baseDir, true);
+        }
+    }
+}
+
+static Task TestPolicyDeniesExecShellCwdOutsideWorkspace()
+{
+    var baseDir = Path.Combine(Path.GetTempPath(), "agent-policy-shell-" + Guid.NewGuid().ToString("n"));
+    var workspace = Path.Combine(baseDir, "repo");
+    var sibling = Path.Combine(baseDir, "repo-out");
+    Directory.CreateDirectory(workspace);
+    Directory.CreateDirectory(sibling);
+
+    try
+    {
+        var config = new AgentConfig();
+        var policy = new DefaultPolicyEngine(config);
+        using var doc = JsonDocument.Parse($"{{\"command\":\"pwd\",\"cwd\":{JsonSerializer.Serialize(sibling)}}}");
+        var call = new ToolCall("exec_shell", doc.RootElement.Clone(), "test");
+        var context = new ToolContext(
+            WorkspaceRoot: workspace,
+            SessionId: "s1",
+            ProfileName: "reasoning",
+            Config: config,
+            SearchService: new NullSearchService());
+
+        var decision = policy.Evaluate(call, context);
+        Assert(decision.Kind == PolicyDecisionKind.Deny, "Expected deny decision for exec_shell cwd outside workspace.");
+        return Task.CompletedTask;
+    }
+    finally
+    {
+        if (Directory.Exists(baseDir))
+        {
+            Directory.Delete(baseDir, true);
+        }
+    }
+}
+
+static Task TestPolicyDeniesDestructiveShellPatterns()
+{
+    var config = new AgentConfig();
+    var policy = new DefaultPolicyEngine(config);
+    using var doc = JsonDocument.Parse("{\"command\":\"rm -rf .\"}");
+    var call = new ToolCall("exec_shell", doc.RootElement.Clone(), "dangerous");
+    var context = new ToolContext("/tmp/workspace", "s1", "reasoning", config, new NullSearchService());
+
+    var decision = policy.Evaluate(call, context);
+    Assert(decision.Kind == PolicyDecisionKind.Deny, "Expected deny for destructive shell pattern.");
     return Task.CompletedTask;
 }
 
@@ -182,6 +269,41 @@ static async Task TestLoopRetriesOnNonJsonOutput()
     Assert(result.StepTrace.Count == 1, "Expected one executed tool step after invalid response retry.");
 }
 
+static async Task TestLoopRecoversToolCallFromPlainText()
+{
+    var temp = Path.Combine(Path.GetTempPath(), "agent-tests-plain-" + Guid.NewGuid().ToString("n"));
+    Directory.CreateDirectory(temp);
+
+    try
+    {
+        var config = new AgentConfig();
+        var responses = new Queue<ModelTurnResult>();
+        responses.Enqueue(new ModelTurnResult("Action: fs_list\nArguments: {\"path\":\".\",\"recurse\":false,\"include_hidden\":false}", "fake"));
+        responses.Enqueue(new ModelTurnResult("{\"type\":\"final\",\"message\":\"done\"}", "fake"));
+
+        var router = new FakeModelRouter(new FakeModelClient(responses), "fake");
+        var loop = new ReActAgentLoop(
+            router,
+            new ITool[] { new FsListTool() },
+            new DefaultPolicyEngine(config),
+            new AutoApproveService(true),
+            new InMemoryEventStore(),
+            new DefaultToolContextFactory(config, new NullSearchService()),
+            config);
+
+        var result = await loop.RunAsync(new AgentRunRequest("inspect project files", temp, "reasoning", 6), CancellationToken.None);
+        Assert(result.Success, "Expected success after recovering tool call from plain text.");
+        Assert(result.StepTrace.Count == 1, "Expected one tool step after plain-text recovery.");
+    }
+    finally
+    {
+        if (Directory.Exists(temp))
+        {
+            Directory.Delete(temp, true);
+        }
+    }
+}
+
 static async Task TestLoopStopsAfterRepeatedInvalidOutput()
 {
     var config = new AgentConfig
@@ -220,6 +342,48 @@ static async Task TestLoopStopsAfterRepeatedInvalidOutput()
     var result = await loop.RunAsync(new AgentRunRequest("create file test.txt", Path.GetTempPath(), "reasoning", 10), CancellationToken.None);
     Assert(!result.Success, "Expected failure after repeated invalid model output.");
     Assert(result.FinalMessage.Contains("invalid model responses", StringComparison.OrdinalIgnoreCase), "Expected invalid-response stop message.");
+}
+
+static async Task TestLoopStopsAfterRepeatedUnknownToolOutput()
+{
+    var config = new AgentConfig
+    {
+        Runtime = new RuntimeConfig
+        {
+            MaxSteps = 10,
+            MaxInvalidModelResponses = 3,
+            MaxConsecutiveFinalWithoutTools = 4,
+            InvalidResponsesBeforeProfileSwitch = 10,
+            FinalWithoutToolsBeforeProfileSwitch = 10,
+            ToolTimeoutSeconds = 120,
+            MaxOutputBytes = 64 * 1024,
+            ModelMinOutputTokens = 256,
+            ModelMaxOutputTokens = 4096,
+            ModelMinTemperature = 0.0,
+            ModelMaxTemperature = 0.7,
+            LexicalSearchDefaultMaxResults = 20,
+            RerankCandidateLimit = 12
+        }
+    };
+
+    var responses = new Queue<ModelTurnResult>();
+    responses.Enqueue(new ModelTurnResult("{\"type\":\"tool\",\"tool\":\"unknown_1\",\"reason\":\"x\",\"arguments\":{}}", "fake"));
+    responses.Enqueue(new ModelTurnResult("{\"type\":\"tool\",\"tool\":\"unknown_2\",\"reason\":\"x\",\"arguments\":{}}", "fake"));
+    responses.Enqueue(new ModelTurnResult("{\"type\":\"tool\",\"tool\":\"unknown_3\",\"reason\":\"x\",\"arguments\":{}}", "fake"));
+
+    var router = new FakeModelRouter(new FakeModelClient(responses), "fake");
+    var loop = new ReActAgentLoop(
+        router,
+        new ITool[] { new EchoTool() },
+        new DefaultPolicyEngine(config),
+        new AutoApproveService(true),
+        new InMemoryEventStore(),
+        new DefaultToolContextFactory(config, new NullSearchService()),
+        config);
+
+    var result = await loop.RunAsync(new AgentRunRequest("create file test.txt", Path.GetTempPath(), "reasoning", 10), CancellationToken.None);
+    Assert(!result.Success, "Expected failure after repeated unknown-tool model output.");
+    Assert(result.FinalMessage.Contains("invalid model decisions", StringComparison.OrdinalIgnoreCase), "Expected unknown-tool stop message.");
 }
 
 static async Task TestLoopSwitchesProfileAfterInvalidResponses()

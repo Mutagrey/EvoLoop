@@ -253,6 +253,8 @@ public static class Program
             observer),
             CancellationToken.None);
 
+        await observer.WriteActivitySummaryAsync(workspace, CancellationToken.None);
+
         renderer.WritePanel(
             result.Success ? "Done" : "Incomplete",
             $"Session: {result.SessionId}\nSteps: {result.Steps}\n\n{result.FinalMessage}");
@@ -412,6 +414,10 @@ internal sealed class SpinnerObserver : IAgentRunObserver, IDisposable
 {
     private readonly AnsiRenderer _renderer;
     private readonly object _sync = new();
+    private readonly List<string> _activityFeed = new();
+    private readonly HashSet<string> _editedFiles = new(StringComparer.OrdinalIgnoreCase);
+    private readonly List<string> _ranCommands = new();
+    private readonly List<string> _exploreNotes = new();
     private CancellationTokenSource? _spinnerCts;
     private Task? _spinnerTask;
 
@@ -428,14 +434,17 @@ internal sealed class SpinnerObserver : IAgentRunObserver, IDisposable
                 _renderer.WriteStatus("SESSION", evt.Message, ConsoleColor.Cyan);
                 break;
             case AgentRunEventType.ModelCallStarted:
-                StartSpinner(evt.Step);
+                StartSpinner(evt.Step, evt.Message);
                 break;
             case AgentRunEventType.ModelCallCompleted:
                 StopSpinner();
-                _renderer.WriteStatus("MODEL", "Decision ready", ConsoleColor.Blue);
+                _renderer.WriteStatus("MODEL", evt.Message, ConsoleColor.Blue);
                 break;
             case AgentRunEventType.ModelProfileSwitched:
                 _renderer.WriteStatus("MODEL-SWITCH", evt.Message, ConsoleColor.Cyan);
+                break;
+            case AgentRunEventType.ModelDecisionRecovered:
+                _renderer.WriteStatus("RECOVER", evt.Message, ConsoleColor.Cyan);
                 break;
             case AgentRunEventType.ModelResponseInvalid:
                 _renderer.WriteStatus("WARN", evt.Message, ConsoleColor.Yellow);
@@ -444,7 +453,7 @@ internal sealed class SpinnerObserver : IAgentRunObserver, IDisposable
                 _renderer.WriteStatus("WARN", evt.Message, ConsoleColor.Yellow);
                 break;
             case AgentRunEventType.ToolDecision:
-                _renderer.WriteStatus("PLAN", $"Using {evt.ToolName}", ConsoleColor.Magenta);
+                _renderer.WriteStatus("PLAN", evt.Message, ConsoleColor.Magenta);
                 break;
             case AgentRunEventType.PolicyDenied:
                 _renderer.WriteStatus("DENY", evt.Message, ConsoleColor.Red);
@@ -459,10 +468,14 @@ internal sealed class SpinnerObserver : IAgentRunObserver, IDisposable
                 _renderer.WriteStatus("APPROVAL", "Rejected", ConsoleColor.Red);
                 break;
             case AgentRunEventType.ToolExecutionStarted:
-                _renderer.WriteStatus("RUN", $"Executing {evt.ToolName}", ConsoleColor.Cyan);
+                _renderer.WriteStatus("RUN", evt.Message, ConsoleColor.Cyan);
                 break;
             case AgentRunEventType.ToolExecutionCompleted:
-                _renderer.WriteStatus("RUN", evt.Message, ConsoleColor.Green);
+                _renderer.WriteStatus(
+                    "RESULT",
+                    evt.Message,
+                    evt.Message.Contains("failed", StringComparison.OrdinalIgnoreCase) ? ConsoleColor.Red : ConsoleColor.Green);
+                TrackActivity(evt.Message);
                 break;
             case AgentRunEventType.SessionCompleted:
                 StopSpinner();
@@ -482,14 +495,71 @@ internal sealed class SpinnerObserver : IAgentRunObserver, IDisposable
         StopSpinner();
     }
 
-    private void StartSpinner(int? step)
+    public async Task WriteActivitySummaryAsync(string workspace, CancellationToken ct)
+    {
+        if (_activityFeed.Count == 0)
+        {
+            return;
+        }
+
+        var sb = new StringBuilder();
+        var diffStats = await ReadGitNumStatAsync(workspace, _editedFiles, ct);
+
+        if (_editedFiles.Count > 0)
+        {
+            sb.AppendLine("Edited");
+            foreach (var file in _editedFiles.OrderBy(x => x, StringComparer.OrdinalIgnoreCase))
+            {
+                if (diffStats.TryGetValue(file, out var stat))
+                {
+                    sb.AppendLine($"{file}  +{stat.Added} -{stat.Deleted}");
+                }
+                else
+                {
+                    sb.AppendLine(file);
+                }
+            }
+            sb.AppendLine();
+        }
+
+        if (_exploreNotes.Count > 0)
+        {
+            sb.AppendLine($"Explored {_exploreNotes.Count} item(s)");
+            foreach (var note in _exploreNotes.TakeLast(6))
+            {
+                sb.AppendLine(note);
+            }
+            sb.AppendLine();
+        }
+
+        if (_ranCommands.Count > 0)
+        {
+            sb.AppendLine("Ran");
+            foreach (var cmd in _ranCommands.Distinct(StringComparer.OrdinalIgnoreCase).TakeLast(10))
+            {
+                sb.AppendLine(cmd);
+            }
+            sb.AppendLine();
+        }
+
+        sb.AppendLine("Timeline");
+        foreach (var line in _activityFeed.TakeLast(14))
+        {
+            sb.AppendLine(line);
+        }
+
+        _renderer.WritePanel("Activity", sb.ToString().TrimEnd());
+    }
+
+    private void StartSpinner(int? step, string? hint)
     {
         lock (_sync)
         {
             StopSpinner();
             _spinnerCts = new CancellationTokenSource();
             var token = _spinnerCts.Token;
-            var label = step.HasValue ? $"Thinking (step {step.Value})" : "Thinking";
+            var hintText = string.IsNullOrWhiteSpace(hint) ? "Thinking" : ToOneLine(hint, 60);
+            var label = step.HasValue ? $"Thinking (step {step.Value}) {hintText}" : $"Thinking {hintText}";
             _spinnerTask = Task.Run(async () =>
             {
                 var frames = new[] { "|", "/", "-", "\\" };
@@ -535,6 +605,112 @@ internal sealed class SpinnerObserver : IAgentRunObserver, IDisposable
             _spinnerCts.Dispose();
             _spinnerCts = null;
         }
+    }
+
+    private void TrackActivity(string message)
+    {
+        if (string.IsNullOrWhiteSpace(message))
+        {
+            return;
+        }
+
+        var normalized = ToOneLine(message, 220);
+        _activityFeed.Add(normalized);
+
+        if (normalized.StartsWith("Edited ", StringComparison.OrdinalIgnoreCase))
+        {
+            var file = NormalizePath(normalized["Edited ".Length..]);
+            if (!string.IsNullOrWhiteSpace(file))
+            {
+                _editedFiles.Add(file);
+            }
+            return;
+        }
+
+        if (normalized.StartsWith("Explored ", StringComparison.OrdinalIgnoreCase) ||
+            normalized.StartsWith("Searched ", StringComparison.OrdinalIgnoreCase))
+        {
+            _exploreNotes.Add(normalized);
+            return;
+        }
+
+        if (normalized.StartsWith("Ran ", StringComparison.OrdinalIgnoreCase))
+        {
+            var cmd = normalized["Ran ".Length..].Trim();
+            if (!string.IsNullOrWhiteSpace(cmd))
+            {
+                _ranCommands.Add(cmd);
+            }
+        }
+    }
+
+    private static async Task<Dictionary<string, (string Added, string Deleted)>> ReadGitNumStatAsync(
+        string workspace,
+        IReadOnlyCollection<string> editedFiles,
+        CancellationToken ct)
+    {
+        var stats = new Dictionary<string, (string Added, string Deleted)>(StringComparer.OrdinalIgnoreCase);
+        if (editedFiles.Count == 0)
+        {
+            return stats;
+        }
+
+        var args = new List<string> { "diff", "--numstat", "--" };
+        foreach (var file in editedFiles)
+        {
+            args.Add(file);
+        }
+
+        ProcessExecutionResult result;
+        try
+        {
+            result = await ProcessRunner.RunAsync("git", args, workspace, ct, 32 * 1024);
+        }
+        catch
+        {
+            return stats;
+        }
+
+        if (!result.Success || string.IsNullOrWhiteSpace(result.StdOut))
+        {
+            return stats;
+        }
+
+        var lines = result.StdOut.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+        foreach (var line in lines)
+        {
+            var parts = line.Split('\t');
+            if (parts.Length < 3)
+            {
+                continue;
+            }
+
+            var file = NormalizePath(parts[2].Trim());
+            if (string.IsNullOrWhiteSpace(file))
+            {
+                continue;
+            }
+
+            stats[file] = (parts[0], parts[1]);
+        }
+
+        return stats;
+    }
+
+    private static string NormalizePath(string path)
+    {
+        return path.Trim().Replace('\\', '/');
+    }
+
+    private static string ToOneLine(string value, int maxLen)
+    {
+        var oneLine = value.Replace('\r', ' ').Replace('\n', ' ').Trim();
+        if (oneLine.Length <= maxLen)
+        {
+            return oneLine;
+        }
+
+        return oneLine[..maxLen] + "...";
     }
 }
 

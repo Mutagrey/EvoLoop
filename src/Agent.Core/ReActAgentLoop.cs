@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace Agent.Core;
 
@@ -68,7 +69,10 @@ public sealed class ReActAgentLoop : IAgentLoop
         {
             for (var step = 1; step <= maxSteps; step++)
             {
-                await observer.OnEventAsync(new AgentRunEvent(AgentRunEventType.ModelCallStarted, "Analyzing next action", step), ct);
+                await observer.OnEventAsync(new AgentRunEvent(
+                    AgentRunEventType.ModelCallStarted,
+                    $"Step {step}/{maxSteps}: analyzing with profile '{currentProfileName}'",
+                    step), ct);
 
                 var modelRequest = new ModelTurnRequest(
                     currentProfileName,
@@ -88,7 +92,7 @@ public sealed class ReActAgentLoop : IAgentLoop
 
                 await observer.OnEventAsync(new AgentRunEvent(AgentRunEventType.ModelCallCompleted, "Model response received", step), ct);
 
-                var decision = AgentDecisionParser.Parse(modelResult.Content);
+                var decision = AgentDecisionParser.Parse(modelResult.Content, _tools.Keys);
                 if (decision.Type == AgentDecisionType.Invalid)
                 {
                     consecutiveInvalidResponses++;
@@ -97,41 +101,66 @@ public sealed class ReActAgentLoop : IAgentLoop
                         $"Model response format invalid at step {step}.",
                         step), ct);
 
-                    if (consecutiveInvalidResponses >= GetSwitchThreshold(_config.Runtime.InvalidResponsesBeforeProfileSwitch) &&
-                        TrySwitchProfile(profilePlan, ref profileIndex, ref currentProfileName, ref modelClient, ref modelName, request.WorkspaceRoot, session.SessionId, ref context))
+                    var bootstrapDecision = TryCreateBootstrapDecision(
+                        requiresToolBeforeFinal,
+                        toolStepsExecuted,
+                        consecutiveInvalidResponses,
+                        request.Task);
+                    if (bootstrapDecision is not null)
                     {
+                        decision = bootstrapDecision;
                         consecutiveInvalidResponses = 0;
-                        consecutiveFinalWithoutTools = 0;
                         await observer.OnEventAsync(new AgentRunEvent(
-                            AgentRunEventType.ModelProfileSwitched,
-                            $"Switched model profile to '{currentProfileName}' after repeated invalid responses.",
-                            step), ct);
-                        history.Add(new ModelMessage("user", $"OBSERVATION: Profile switched to '{currentProfileName}'. Continue with strict JSON tool decisions."));
+                            AgentRunEventType.ModelDecisionRecovered,
+                            $"Recovered by deterministic bootstrap tool '{decision.ToolName}'.",
+                            step,
+                            decision.ToolName), ct);
+                    }
+                    else
+                    {
+                        if (consecutiveInvalidResponses >= GetSwitchThreshold(_config.Runtime.InvalidResponsesBeforeProfileSwitch) &&
+                            TrySwitchProfile(profilePlan, ref profileIndex, ref currentProfileName, ref modelClient, ref modelName, request.WorkspaceRoot, session.SessionId, ref context))
+                        {
+                            consecutiveInvalidResponses = 0;
+                            consecutiveFinalWithoutTools = 0;
+                            await observer.OnEventAsync(new AgentRunEvent(
+                                AgentRunEventType.ModelProfileSwitched,
+                                $"Switched model profile to '{currentProfileName}' after repeated invalid responses.",
+                                step), ct);
+                            history.Add(new ModelMessage("user", $"OBSERVATION: Profile switched to '{currentProfileName}'. Continue with strict JSON tool decisions."));
+                            continue;
+                        }
+
+                        if (consecutiveInvalidResponses >= _config.Runtime.MaxInvalidModelResponses)
+                        {
+                            finalMessage = $"Stopped after {consecutiveInvalidResponses} invalid model responses. Model must return strict JSON tool/final schema.";
+                            success = false;
+                            break;
+                        }
+
+                        history.Add(new ModelMessage("assistant", modelResult.Content));
+                        history.Add(new ModelMessage(
+                            "user",
+                            "OBSERVATION: Response format invalid. Return EXACTLY one JSON object using one of schemas: " +
+                            "{\"type\":\"tool\",\"tool\":\"...\",\"reason\":\"...\",\"arguments\":{...}} " +
+                            "or {\"type\":\"final\",\"message\":\"...\"} or {\"type\":\"clarify\",\"message\":\"...\"}."));
                         continue;
                     }
-
-                    if (consecutiveInvalidResponses >= _config.Runtime.MaxInvalidModelResponses)
-                    {
-                        finalMessage = $"Stopped after {consecutiveInvalidResponses} invalid model responses. Model must return strict JSON tool/final schema.";
-                        success = false;
-                        break;
-                    }
-
-                    history.Add(new ModelMessage("assistant", modelResult.Content));
-                    history.Add(new ModelMessage(
-                        "user",
-                        "OBSERVATION: Response format invalid. Return EXACTLY one JSON object using one of schemas: " +
-                        "{\"type\":\"tool\",\"tool\":\"...\",\"reason\":\"...\",\"arguments\":{...}} " +
-                        "or {\"type\":\"final\",\"message\":\"...\"} or {\"type\":\"clarify\",\"message\":\"...\"}."));
-                    continue;
                 }
-                else
+
+                if (decision.Type == AgentDecisionType.Tool &&
+                    decision.Reason.Contains("recovered", StringComparison.OrdinalIgnoreCase))
                 {
-                    consecutiveInvalidResponses = 0;
+                    await observer.OnEventAsync(new AgentRunEvent(
+                        AgentRunEventType.ModelDecisionRecovered,
+                        $"Recovered model decision to tool '{decision.ToolName}'.",
+                        step,
+                        decision.ToolName), ct);
                 }
 
                 if (decision.Type == AgentDecisionType.Final)
                 {
+                    consecutiveInvalidResponses = 0;
                     if (requiresToolBeforeFinal && toolStepsExecuted == 0 && _tools.Count > 0)
                     {
                         consecutiveFinalWithoutTools++;
@@ -175,6 +204,7 @@ public sealed class ReActAgentLoop : IAgentLoop
 
                 if (decision.Type == AgentDecisionType.Clarify)
                 {
+                    consecutiveInvalidResponses = 0;
                     finalMessage = decision.Message;
                     success = false;
                     break;
@@ -183,16 +213,43 @@ public sealed class ReActAgentLoop : IAgentLoop
                 if (string.IsNullOrWhiteSpace(decision.ToolName) || !_tools.TryGetValue(decision.ToolName, out var tool))
                 {
                     var invalidTool = decision.ToolName ?? "<none>";
+                    consecutiveInvalidResponses++;
+                    await observer.OnEventAsync(new AgentRunEvent(
+                        AgentRunEventType.ModelResponseInvalid,
+                        $"Unknown tool '{invalidTool}' at step {step}.",
+                        step), ct);
+
+                    if (consecutiveInvalidResponses >= GetSwitchThreshold(_config.Runtime.InvalidResponsesBeforeProfileSwitch) &&
+                        TrySwitchProfile(profilePlan, ref profileIndex, ref currentProfileName, ref modelClient, ref modelName, request.WorkspaceRoot, session.SessionId, ref context))
+                    {
+                        consecutiveInvalidResponses = 0;
+                        consecutiveFinalWithoutTools = 0;
+                        await observer.OnEventAsync(new AgentRunEvent(
+                            AgentRunEventType.ModelProfileSwitched,
+                            $"Switched model profile to '{currentProfileName}' after repeated unknown tool decisions.",
+                            step), ct);
+                        history.Add(new ModelMessage("user", $"OBSERVATION: Profile switched to '{currentProfileName}'. Use only allowed tools: {string.Join(", ", _tools.Keys.OrderBy(x => x))}."));
+                        continue;
+                    }
+
+                    if (consecutiveInvalidResponses >= _config.Runtime.MaxInvalidModelResponses)
+                    {
+                        finalMessage = $"Stopped after {consecutiveInvalidResponses} invalid model decisions (format/unknown tool).";
+                        success = false;
+                        break;
+                    }
+
                     history.Add(new ModelMessage("assistant", modelResult.Content));
                     history.Add(new ModelMessage("user", $"OBSERVATION: Unknown tool '{invalidTool}'. Use one of: {string.Join(", ", _tools.Keys.OrderBy(x => x))}."));
                     continue;
                 }
 
+                consecutiveInvalidResponses = 0;
                 consecutiveFinalWithoutTools = 0;
 
                 await observer.OnEventAsync(new AgentRunEvent(
                     AgentRunEventType.ToolDecision,
-                    $"Tool selected: {tool.Name}",
+                    BuildToolPlanMessage(tool.Name, decision.Reason, decision.Arguments),
                     step,
                     tool.Name), ct);
 
@@ -277,7 +334,7 @@ public sealed class ReActAgentLoop : IAgentLoop
 
                 await observer.OnEventAsync(new AgentRunEvent(
                     AgentRunEventType.ToolExecutionStarted,
-                    "Executing tool",
+                    BuildToolRunMessage(tool.Name, decision.Arguments),
                     step,
                     tool.Name), ct);
 
@@ -303,11 +360,14 @@ public sealed class ReActAgentLoop : IAgentLoop
 
                 await observer.OnEventAsync(new AgentRunEvent(
                     AgentRunEventType.ToolExecutionCompleted,
-                    result.Success ? "Tool completed" : "Tool failed",
+                    BuildToolCompletionMessage(tool.Name, decision.Arguments, result),
                     step,
                     tool.Name), ct);
 
-                var output = TruncateOutput(result.StdOut ?? result.Message, _config.Runtime.MaxOutputBytes);
+                var primaryOutput = !string.IsNullOrWhiteSpace(result.StdOut)
+                    ? result.StdOut
+                    : result.Message;
+                var output = TruncateOutput(primaryOutput, _config.Runtime.MaxOutputBytes);
                 var stepRecord = new SessionStep(
                     session.SessionId,
                     step,
@@ -458,6 +518,92 @@ public sealed class ReActAgentLoop : IAgentLoop
         return sb.ToString();
     }
 
+    private static string BuildToolPlanMessage(string toolName, string reason, JsonElement arguments)
+    {
+        var normalizedReason = string.IsNullOrWhiteSpace(reason) ? "no reason provided" : ToOneLine(reason, 160);
+        return $"Plan {toolName}: {normalizedReason} | args {PreviewArguments(arguments)}";
+    }
+
+    private static string BuildToolRunMessage(string toolName, JsonElement arguments)
+    {
+        var path = ToolArgumentReader.GetString(arguments, "path");
+        var query = ToolArgumentReader.GetString(arguments, "query");
+        var command = ToolArgumentReader.GetString(arguments, "command");
+        var gitRef = ToolArgumentReader.GetString(arguments, "ref");
+        var queryText = string.IsNullOrWhiteSpace(query) ? "<query>" : ToOneLine(query, 80);
+        var commandText = string.IsNullOrWhiteSpace(command) ? "<command>" : ToOneLine(command, 120);
+
+        return toolName switch
+        {
+            "fs_list" => $"Exploring directory {path ?? "."}",
+            "fs_read" => $"Exploring file {path ?? "<missing path>"}",
+            "fs_write" => $"Editing file {path ?? "<missing path>"}",
+            "fs_patch" => $"Editing file {path ?? "<missing path>"}",
+            "fs_delete" => $"Deleting path {path ?? "<missing path>"}",
+            "search_lexical" => $"Exploring search query \"{queryText}\"",
+            "search_semantic" => $"Exploring semantic query \"{queryText}\"",
+            "exec_shell" => $"Running command: {commandText}",
+            "git_status" => "Running git status --short --branch",
+            "git_diff" => "Running git diff",
+            "git_log" => "Running git log --oneline",
+            "git_show" => $"Running git show --stat {gitRef ?? "HEAD"}",
+            "git_add" => $"Running git add -- {ToolArgumentReader.GetString(arguments, "pathspec") ?? "."}",
+            "git_commit" => "Running git commit -m <message>",
+            _ => $"Running tool {toolName}"
+        };
+    }
+
+    private static string BuildToolCompletionMessage(string toolName, JsonElement arguments, ToolResult result)
+    {
+        if (!result.Success)
+        {
+            var failReason = !string.IsNullOrWhiteSpace(result.StdErr) ? result.StdErr : result.Message;
+            return $"{toolName} failed: {ToOneLine(failReason, 180)}";
+        }
+
+        var path = ToolArgumentReader.GetString(arguments, "path");
+        var query = ToolArgumentReader.GetString(arguments, "query");
+        var command = ToolArgumentReader.GetString(arguments, "command");
+        var gitRef = ToolArgumentReader.GetString(arguments, "ref");
+        var queryText = string.IsNullOrWhiteSpace(query) ? "<query>" : ToOneLine(query, 80);
+        var commandText = string.IsNullOrWhiteSpace(command) ? "<command>" : ToOneLine(command, 140);
+
+        return toolName switch
+        {
+            "fs_list" => $"Explored {(path ?? ".")}",
+            "fs_read" => $"Explored {path ?? "<missing path>"}",
+            "fs_write" => $"Edited {path ?? "<missing path>"}",
+            "fs_patch" => $"Edited {path ?? "<missing path>"}",
+            "fs_delete" => $"Deleted {path ?? "<missing path>"}",
+            "search_lexical" => $"Searched \"{queryText}\"",
+            "search_semantic" => $"Searched semantically \"{queryText}\"",
+            "exec_shell" => $"Ran {commandText}",
+            "git_status" => "Ran git status --short --branch",
+            "git_diff" => "Ran git diff",
+            "git_log" => "Ran git log --oneline",
+            "git_show" => $"Ran git show --stat {gitRef ?? "HEAD"}",
+            "git_add" => $"Ran git add -- {ToolArgumentReader.GetString(arguments, "pathspec") ?? "."}",
+            "git_commit" => "Ran git commit -m <message>",
+            _ => $"{toolName} completed"
+        };
+    }
+
+    private static string ToOneLine(string? value, int maxLength)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return string.Empty;
+        }
+
+        var oneLine = value.Replace('\r', ' ').Replace('\n', ' ').Trim();
+        if (oneLine.Length <= maxLength)
+        {
+            return oneLine;
+        }
+
+        return oneLine[..maxLength] + "...";
+    }
+
     private static string PreviewArguments(JsonElement args)
     {
         var raw = args.GetRawText();
@@ -556,6 +702,72 @@ public sealed class ReActAgentLoop : IAgentLoop
     {
         return rawThreshold <= 0 ? 1 : rawThreshold;
     }
+
+    private AgentDecision? TryCreateBootstrapDecision(
+        bool requiresToolBeforeFinal,
+        int toolStepsExecuted,
+        int consecutiveInvalidResponses,
+        string task)
+    {
+        if (!requiresToolBeforeFinal || toolStepsExecuted > 0 || consecutiveInvalidResponses < 2)
+        {
+            return null;
+        }
+
+        if (_tools.ContainsKey("fs_list"))
+        {
+            return CreateToolDecision(
+                "fs_list",
+                "deterministic bootstrap: inspect workspace root before further decisions",
+                "{\"path\":\".\",\"recurse\":false,\"include_hidden\":false}");
+        }
+
+        if (_tools.ContainsKey("git_status"))
+        {
+            return CreateToolDecision(
+                "git_status",
+                "deterministic bootstrap: inspect repository state before further decisions",
+                "{}");
+        }
+
+        if (_tools.ContainsKey("search_lexical"))
+        {
+            var seedQuery = BuildSeedSearchQuery(task);
+            return CreateToolDecision(
+                "search_lexical",
+                "deterministic bootstrap: locate candidate code before further decisions",
+                $"{{\"query\":{JsonSerializer.Serialize(seedQuery)},\"max_results\":12}}");
+        }
+
+        return null;
+    }
+
+    private static string BuildSeedSearchQuery(string task)
+    {
+        if (string.IsNullOrWhiteSpace(task))
+        {
+            return "TODO";
+        }
+
+        var words = task
+            .Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(w => w.Length >= 4 && char.IsLetterOrDigit(w[0]))
+            .Take(3)
+            .ToArray();
+
+        return words.Length == 0 ? "TODO" : string.Join(' ', words);
+    }
+
+    private static AgentDecision CreateToolDecision(string toolName, string reason, string argsJson)
+    {
+        using var doc = JsonDocument.Parse(argsJson);
+        return new AgentDecision(
+            AgentDecisionType.Tool,
+            toolName,
+            doc.RootElement.Clone(),
+            reason,
+            string.Empty);
+    }
 }
 
 internal enum AgentDecisionType
@@ -583,7 +795,7 @@ internal static class AgentDecisionParser
 {
     private static readonly JsonDocument EmptyObject = JsonDocument.Parse("{}");
 
-    public static AgentDecision Parse(string content)
+    public static AgentDecision Parse(string content, IEnumerable<string>? toolNames = null)
     {
         if (string.IsNullOrWhiteSpace(content))
         {
@@ -592,12 +804,18 @@ internal static class AgentDecisionParser
 
         if (!TryParseJson(content, out var document))
         {
-            return AgentDecision.Invalid("Response is not valid JSON.");
+            var recovered = TryParseFromText(content, toolNames);
+            return recovered ?? AgentDecision.Invalid("Response is not valid JSON.");
         }
 
         using (document)
         {
             var root = document.RootElement;
+            if (TryParseToolCallVariants(root, out var variantDecision))
+            {
+                return variantDecision;
+            }
+
             if (!root.TryGetProperty("type", out var typeEl))
             {
                 return AgentDecision.Invalid("JSON missing required 'type' property.");
@@ -652,5 +870,171 @@ internal static class AgentDecisionParser
 
         document = null!;
         return false;
+    }
+
+    private static bool TryParseToolCallVariants(JsonElement root, out AgentDecision decision)
+    {
+        if (root.ValueKind != JsonValueKind.Object)
+        {
+            decision = AgentDecision.Invalid("Root JSON is not an object.");
+            return false;
+        }
+
+        if (root.TryGetProperty("tool", out var toolEl) && toolEl.ValueKind == JsonValueKind.String)
+        {
+            var normalizedArgs = root.TryGetProperty("arguments", out var argsEl) ? NormalizeArguments(argsEl) :
+                root.TryGetProperty("args", out var argsAltEl) ? NormalizeArguments(argsAltEl) :
+                EmptyObject.RootElement.Clone();
+
+            decision = new AgentDecision(
+                AgentDecisionType.Tool,
+                toolEl.GetString() ?? string.Empty,
+                normalizedArgs,
+                root.TryGetProperty("reason", out var reasonEl) ? reasonEl.GetString() ?? "recovered tool decision" : "recovered tool decision",
+                string.Empty);
+            return true;
+        }
+
+        if (root.TryGetProperty("action", out var actionEl) && actionEl.ValueKind == JsonValueKind.String)
+        {
+            var normalizedArgs = root.TryGetProperty("action_input", out var actionInputEl) ? NormalizeArguments(actionInputEl) :
+                root.TryGetProperty("arguments", out var argsEl) ? NormalizeArguments(argsEl) :
+                EmptyObject.RootElement.Clone();
+
+            decision = new AgentDecision(
+                AgentDecisionType.Tool,
+                actionEl.GetString() ?? string.Empty,
+                normalizedArgs,
+                root.TryGetProperty("reason", out var reasonEl) ? reasonEl.GetString() ?? "recovered action decision" : "recovered action decision",
+                string.Empty);
+            return true;
+        }
+
+        if (!root.TryGetProperty("type", out _) &&
+            root.TryGetProperty("message", out var messageEl) &&
+            messageEl.ValueKind == JsonValueKind.String)
+        {
+            decision = AgentDecision.Final(messageEl.GetString() ?? string.Empty);
+            return true;
+        }
+
+        decision = AgentDecision.Invalid("No known tool-call variant.");
+        return false;
+    }
+
+    private static AgentDecision? TryParseFromText(string content, IEnumerable<string>? toolNames)
+    {
+        var trimmed = content.Trim();
+        if (trimmed.Length == 0)
+        {
+            return null;
+        }
+
+        var finalMatch = Regex.Match(trimmed, @"^\s*(final|done|completed)\s*[:\-]\s*(.+)$", RegexOptions.IgnoreCase);
+        if (finalMatch.Success)
+        {
+            return AgentDecision.Final(finalMatch.Groups[2].Value.Trim());
+        }
+
+        var toolName = TryFindToolName(trimmed, toolNames);
+        if (string.IsNullOrWhiteSpace(toolName))
+        {
+            return null;
+        }
+
+        var arguments = TryExtractArgumentsObject(trimmed) ?? EmptyObject.RootElement.Clone();
+        var reason = "recovered from non-JSON model output";
+        return new AgentDecision(AgentDecisionType.Tool, toolName, arguments, reason, string.Empty);
+    }
+
+    private static string? TryFindToolName(string text, IEnumerable<string>? toolNames)
+    {
+        var toolList = toolNames?.ToList() ?? new List<string>();
+        if (toolList.Count == 0)
+        {
+            return null;
+        }
+
+        var actionTag = Regex.Match(text, @"(?im)^\s*(tool|action)\s*[:=]\s*([a-zA-Z0-9_\-]+)\s*$");
+        if (actionTag.Success)
+        {
+            var candidate = actionTag.Groups[2].Value.Trim();
+            if (toolList.Any(t => t.Equals(candidate, StringComparison.OrdinalIgnoreCase)))
+            {
+                return toolList.First(t => t.Equals(candidate, StringComparison.OrdinalIgnoreCase));
+            }
+        }
+
+        foreach (var tool in toolList.OrderByDescending(t => t.Length))
+        {
+            if (Regex.IsMatch(text, $@"\b{Regex.Escape(tool)}\b", RegexOptions.IgnoreCase))
+            {
+                return tool;
+            }
+        }
+
+        return null;
+    }
+
+    private static JsonElement? TryExtractArgumentsObject(string text)
+    {
+        var argsTag = Regex.Match(text, @"(?is)(arguments|args)\s*[:=]\s*(\{.*\})");
+        if (argsTag.Success)
+        {
+            var fromTag = argsTag.Groups[2].Value;
+            if (TryParseJson(fromTag, out var docFromTag))
+            {
+                using (docFromTag)
+                {
+                    return docFromTag.RootElement.Clone();
+                }
+            }
+        }
+
+        var start = text.IndexOf('{');
+        var end = text.LastIndexOf('}');
+        if (start >= 0 && end > start)
+        {
+            var candidate = text[start..(end + 1)];
+            if (TryParseJson(candidate, out var doc))
+            {
+                using (doc)
+                {
+                    return doc.RootElement.Clone();
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private static JsonElement NormalizeArguments(JsonElement source)
+    {
+        if (source.ValueKind == JsonValueKind.Object)
+        {
+            return source.Clone();
+        }
+
+        if (source.ValueKind == JsonValueKind.String)
+        {
+            var str = source.GetString() ?? string.Empty;
+            if (TryParseJson(str, out var doc))
+            {
+                using (doc)
+                {
+                    if (doc.RootElement.ValueKind == JsonValueKind.Object)
+                    {
+                        return doc.RootElement.Clone();
+                    }
+                }
+            }
+
+            using var wrapped = JsonDocument.Parse($"{{\"input\":{JsonSerializer.Serialize(str)}}}");
+            return wrapped.RootElement.Clone();
+        }
+
+        var raw = source.GetRawText();
+        using var wrappedFallback = JsonDocument.Parse($"{{\"input\":{raw}}}");
+        return wrappedFallback.RootElement.Clone();
     }
 }
