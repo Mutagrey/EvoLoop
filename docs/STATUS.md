@@ -14,21 +14,31 @@
 - Added plain-output fallback for unsupported Windows consoles to avoid broken ANSI rendering in `cmd`.
 - Injected runtime capability context into the model loop so prompts respect no-admin/offline/missing-tool constraints.
 - Tightened workspace memory ranking so noisy failed runs are less likely to pollute future context.
+- Refreshed the CLI presentation layer with a compact activity-first layout, clearer live step output, and a post-run action summary.
 - Added Windows self-contained publish scripts and a VS Code publish task.
 - Added committed Windows release bundle layout under `release/windows/` for GitHub distribution.
 - Rewrote documentation around Windows-first, no-admin, low-dependency operation.
+- Added explicit execution modes: `run`, `plan`, and `review`.
+- Extended tool contracts with risk/category/mutation metadata and execution-aware `ToolContext`.
+- Switched policy evaluation to metadata-first decisions with approval-mode and execution-mode gating.
+- Added dedicated shell command policy with fallback-only shell execution, blocked restore/install flows, and stronger network command checks.
+- Replaced `fs_patch` dependence on `git apply` with an internal patch service.
+- Added workspace mutation snapshots, `workspace_undo`, and `workspace_snapshot_diff`.
+- Hardened path safety for protected paths such as `.git/config`, hooks, and `.env*`.
+- Made JSONL the canonical typed event log even when `sqlite3` is available.
+- Added project source-of-truth document loading for `AGENTS.md`, architecture, operating modes, and status docs.
 
 ## Current Problems
 
-- The current workspace does not have `.NET 8 SDK`, so this change set could not be compiled or tested end-to-end here.
 - No packaged Windows smoke test has been executed yet against the new `win-x64` publish path.
-- The agent still depends on a remote/local model gateway for actual autonomous task execution; `local-only degraded` mode is diagnostic-safe, not a replacement for a local model runtime.
-- Search reranking still assumes model access and falls back implicitly rather than exposing a richer degraded UX.
+- The agent still depends on a remote/local model gateway for autonomous `run` and `plan` execution; `local-only degraded` mode is still diagnostic-safe, not a replacement for a local model runtime.
+- `Agent.Core`, `Agent.Tools`, `Agent.Storage`, and `Agent.Providers` compile with the bundled local `.NET 8` SDK in this workspace, but `Agent.Cli` and `Agent.Tests` hang during executable-project build here, so end-to-end verification is incomplete in this environment.
+- Snapshot diff output is currently optimized for the most recent mutation, not for a full multi-file workspace review baseline.
 
 ## Next Improvements
 
-- Run a real `.NET 8` build and execute the test harness on a matching build machine.
+- Resolve the executable-project build hang in this macOS workspace and re-run the full test harness.
 - Smoke-test the self-contained Windows artifact on a restricted non-admin machine.
-- Add a richer local-only command surface that can perform repository diagnostics without invoking the model loop.
-- Add tests for git/shell unavailable paths and non-writable workspace behavior.
+- Add richer review summarization for multi-file snapshot diffs and directory deletions.
+- Add tests for non-writable snapshot storage, undo failure recovery, and review-mode fallback behavior.
 - Remove leftover machine-specific clutter files from version control as part of a dedicated cleanup pass.

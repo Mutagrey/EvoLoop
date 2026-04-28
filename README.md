@@ -110,15 +110,20 @@ This refreshes the committed bundles in:
 CLI:
 - `agent doctor`
 - `agent run "<task>"`
+- `agent plan "<task>"`
+- `agent review`
 - `agent --offline-strict`
 
 REPL:
 - `/task <text>`
+- `/plan <text>`
+- `/review [focus]`
 - `/doctor`
 - `/status`
 - `/tools`
 - `/history`
 - `/memory`
+- `/undo`
 - `/cmdlog`
 - `/config`
 - `/exit`

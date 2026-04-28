@@ -1,0 +1,139 @@
+using System.Diagnostics;
+
+namespace Agent.Core;
+
+internal sealed class DefaultToolTurnExecutor : IToolTurnExecutor
+{
+    public async Task<ToolTurnExecutionResult> ExecuteAsync(
+        ToolExecutionRequest request,
+        CancellationToken ct)
+    {
+        var policyDecision = request.PolicyEngine.Evaluate(request.Call, request.Context);
+        if (policyDecision.Kind == PolicyDecisionKind.Deny)
+        {
+            await request.Observer.OnEventAsync(new AgentRunEvent(
+                AgentRunEventType.PolicyDenied,
+                policyDecision.Reason,
+                request.Step,
+                request.Tool.Name), ct);
+
+            await request.Context.EventLog.AppendAsync(new AgentEventRecord(
+                request.Context.SessionId,
+                "policy_denied",
+                DateTimeOffset.UtcNow,
+                policyDecision.Reason,
+                request.Tool.Name,
+                false), ct);
+
+            return new ToolTurnExecutionResult(false, false, null, null, $"OBSERVATION: Policy denied this action: {policyDecision.Reason}");
+        }
+
+        if (policyDecision.Kind == PolicyDecisionKind.RequireApproval)
+        {
+            await request.Observer.OnEventAsync(new AgentRunEvent(
+                AgentRunEventType.ApprovalRequired,
+                policyDecision.Reason,
+                request.Step,
+                request.Tool.Name), ct);
+
+            await request.Context.EventLog.AppendAsync(new AgentEventRecord(
+                request.Context.SessionId,
+                "approval_request",
+                DateTimeOffset.UtcNow,
+                policyDecision.Reason,
+                request.Tool.Name,
+                null), ct);
+
+            var approved = await request.ApprovalService.RequestApprovalAsync(new ApprovalRequest(
+                request.Tool.Name,
+                policyDecision.Reason,
+                request.Call.Arguments.ToString()), ct);
+
+            await request.Context.EventLog.AppendAsync(new AgentEventRecord(
+                request.Context.SessionId,
+                "approval_result",
+                DateTimeOffset.UtcNow,
+                approved ? "approved" : "rejected",
+                request.Tool.Name,
+                approved), ct);
+
+            if (!approved)
+            {
+                await request.Observer.OnEventAsync(new AgentRunEvent(
+                    AgentRunEventType.ApprovalRejected,
+                    "User rejected tool execution.",
+                    request.Step,
+                    request.Tool.Name), ct);
+
+                return new ToolTurnExecutionResult(false, false, null, null, "OBSERVATION: Approval rejected by user.");
+            }
+
+            await request.Observer.OnEventAsync(new AgentRunEvent(
+                AgentRunEventType.ApprovalGranted,
+                "User approved tool execution.",
+                request.Step,
+                request.Tool.Name), ct);
+        }
+
+        await request.Observer.OnEventAsync(new AgentRunEvent(
+            AgentRunEventType.ToolExecutionStarted,
+            $"Running tool {request.Tool.Name}",
+            request.Step,
+            request.Tool.Name), ct);
+
+        await request.Context.EventLog.AppendAsync(new AgentEventRecord(
+            request.Context.SessionId,
+            "tool_call",
+            DateTimeOffset.UtcNow,
+            request.Call.Reason,
+            request.Tool.Name,
+            null), ct);
+
+        ToolResult result;
+        var stopwatch = Stopwatch.StartNew();
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeoutCts.CancelAfter(TimeSpan.FromSeconds(request.Context.Config.Runtime.ToolTimeoutSeconds));
+        try
+        {
+            result = await request.Tool.ExecuteAsync(request.Call, request.Context, timeoutCts.Token);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            result = new ToolResult(false, $"Tool timed out after {request.Context.Config.Runtime.ToolTimeoutSeconds} seconds.");
+        }
+        catch (Exception ex)
+        {
+            result = new ToolResult(false, $"Tool threw exception: {ex.Message}");
+        }
+        stopwatch.Stop();
+
+        var stepRecord = new SessionStep(
+            request.Context.SessionId,
+            request.Step,
+            request.Action,
+            request.Tool.Name,
+            request.Reasoning,
+            result.Success,
+            result.StdOut ?? result.Message,
+            DateTimeOffset.UtcNow,
+            stopwatch.ElapsedMilliseconds,
+            result.Success ? null : result.StdErr ?? result.Message);
+
+        await request.EventStore.AppendStepAsync(stepRecord, ct);
+        await request.Context.EventLog.AppendAsync(new AgentEventRecord(
+            request.Context.SessionId,
+            "tool_result",
+            DateTimeOffset.UtcNow,
+            result.Message,
+            request.Tool.Name,
+            result.Success), ct);
+
+        await request.Observer.OnEventAsync(new AgentRunEvent(
+            AgentRunEventType.ToolExecutionCompleted,
+            result.Message,
+            request.Step,
+            request.Tool.Name), ct);
+
+        return new ToolTurnExecutionResult(true, result.Success, result, stepRecord);
+    }
+}

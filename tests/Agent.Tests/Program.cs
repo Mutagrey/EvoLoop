@@ -16,8 +16,10 @@ var tests = new List<(string Name, Func<Task> Run)>
     ("Policy denies destructive shell patterns", TestPolicyDeniesDestructiveShellPatterns),
     ("Policy reads nested shell command alias", TestPolicyReadsNestedShellCommandAlias),
     ("Policy requires approval for writes", TestPolicyRequiresApprovalForWrite),
+    ("Policy denies protected path mutation", TestPolicyDeniesProtectedPathMutation),
     ("Offline strict denies non-approved network shell", TestOfflineStrictDeniesNetworkShell),
     ("Offline strict allows approved gateway host with approval", TestOfflineStrictAllowsApprovedHostWithApproval),
+    ("Plan mode blocks mutating tools", TestPlanModeBlocksMutatingTools),
     ("Capability probe selects local-only degraded mode without model", TestCapabilityProbeSelectsLocalOnlyModeWithoutModel),
     ("Capability probe selects offline strict mode when model is ready", TestCapabilityProbeSelectsOfflineStrictModeWhenModelReady),
     ("ReAct loop retries on non-json model output", TestLoopRetriesOnNonJsonOutput),
@@ -40,7 +42,9 @@ var tests = new List<(string Name, Func<Task> Run)>
     ("ReAct loop injects workspace memory into model context", TestLoopInjectsWorkspaceMemory),
     ("Workspace memory store persists and loads context", TestWorkspaceMemoryStorePersistsAndLoadsContext),
     ("Workspace memory survives project directory move", TestWorkspaceMemorySurvivesDirectoryMove),
-    ("Workspace memory filters noisy failed runs", TestWorkspaceMemoryFiltersNoisyFailedRuns)
+    ("Workspace memory filters noisy failed runs", TestWorkspaceMemoryFiltersNoisyFailedRuns),
+    ("Patch service applies diff and undo", TestPatchServiceAppliesDiffAndUndo),
+    ("Jsonl event log writes typed events", TestJsonlEventLogWritesTypedEvents)
 };
 
 var failed = 0;
@@ -235,6 +239,19 @@ static Task TestPolicyRequiresApprovalForWrite()
     return Task.CompletedTask;
 }
 
+static Task TestPolicyDeniesProtectedPathMutation()
+{
+    var config = new AgentConfig();
+    var policy = new DefaultPolicyEngine(config);
+    using var doc = JsonDocument.Parse("{\"path\":\".env\",\"content\":\"API_KEY=secret\"}");
+    var call = new ToolCall("fs_write", doc.RootElement.Clone(), "write secret");
+    var context = new ToolContext("/tmp/workspace", "s1", "reasoning", config, new NullSearchService(), RuntimeCapabilities.Default);
+
+    var decision = policy.Evaluate(call, context);
+    Assert(decision.Kind == PolicyDecisionKind.Deny, "Expected protected path write to be denied.");
+    return Task.CompletedTask;
+}
+
 static Task TestOfflineStrictDeniesNetworkShell()
 {
     var config = new AgentConfig
@@ -277,6 +294,45 @@ static Task TestOfflineStrictAllowsApprovedHostWithApproval()
     var decision = policy.Evaluate(call, context);
     Assert(decision.Kind == PolicyDecisionKind.RequireApproval, "Expected approval requirement for approved gateway host command.");
     return Task.CompletedTask;
+}
+
+static async Task TestPlanModeBlocksMutatingTools()
+{
+    var responses = new Queue<ModelTurnResult>();
+    responses.Enqueue(new ModelTurnResult("{\"type\":\"tool\",\"tool\":\"fs_write\",\"reason\":\"write plan output\",\"arguments\":{\"path\":\"plan.txt\",\"content\":\"x\"}}", "fake"));
+    responses.Enqueue(new ModelTurnResult("{\"type\":\"final\",\"message\":\"plan complete\"}", "fake"));
+
+    var client = new FakeModelClient(responses);
+    var router = new FakeModelRouter(client, "fake-model");
+    var config = new AgentConfig();
+    var loop = new ReActAgentLoop(
+        router,
+        new ITool[] { new FsWriteTool() },
+        new DefaultPolicyEngine(config),
+        new AutoApproveService(true),
+        new InMemoryEventStore(),
+        new DefaultToolContextFactory(config, new NullSearchService()),
+        config);
+
+    var temp = Path.Combine(Path.GetTempPath(), "agent-plan-" + Guid.NewGuid().ToString("n"));
+    Directory.CreateDirectory(temp);
+    try
+    {
+        var result = await loop.RunAsync(new AgentRunRequest(
+            "write a plan file",
+            temp,
+            "reasoning",
+            AgentExecutionMode.Plan,
+            ApprovalPolicyMode.ReadOnly,
+            4), CancellationToken.None);
+
+        Assert(result.Success, "Expected run to succeed after policy-blocked plan attempt followed by final response.");
+        Assert(!File.Exists(Path.Combine(temp, "plan.txt")), "Plan mode must not create files.");
+    }
+    finally
+    {
+        Directory.Delete(temp, true);
+    }
 }
 
 static Task TestCapabilityProbeSelectsLocalOnlyModeWithoutModel()
@@ -1073,6 +1129,90 @@ static async Task TestWorkspaceMemoryFiltersNoisyFailedRuns()
     }
 }
 
+static async Task TestPatchServiceAppliesDiffAndUndo()
+{
+    var workspace = Path.Combine(Path.GetTempPath(), "agent-patch-" + Guid.NewGuid().ToString("n"));
+    Directory.CreateDirectory(workspace);
+
+    try
+    {
+        var filePath = Path.Combine(workspace, "notes.txt");
+        await File.WriteAllTextAsync(filePath, "alpha\nbeta\n");
+
+        var service = new WorkspacePatchService();
+        var context = new ToolContext(
+            workspace,
+            "s1",
+            "reasoning",
+            AgentExecutionMode.Run,
+            ApprovalPolicyMode.WorkspaceWrite,
+            new AgentConfig(),
+            new NullSearchService(),
+            RuntimeCapabilities.Default,
+            service,
+            NullEventLog.Instance);
+
+        var patch = string.Join('\n', new[]
+        {
+            "--- a/notes.txt",
+            "+++ b/notes.txt",
+            "@@ -1,2 +1,2 @@",
+            " alpha",
+            "-beta",
+            "+gamma"
+        });
+
+        var patchResult = await service.ApplyPatchAsync(new FilePatchRequest("notes.txt", patch, null, null), context, CancellationToken.None);
+        Assert(patchResult.Success, "Expected built-in patch service to apply unified diff.");
+        var updated = await File.ReadAllTextAsync(filePath);
+        Assert(updated.Contains("gamma", StringComparison.Ordinal), "Expected patched content to be written.");
+
+        var undoResult = await service.UndoLastAsync(workspace, CancellationToken.None);
+        Assert(undoResult.Success, "Expected undo to restore previous file state.");
+        var restored = await File.ReadAllTextAsync(filePath);
+        Assert(restored.Contains("beta", StringComparison.Ordinal), "Expected undo to restore original content.");
+    }
+    finally
+    {
+        if (Directory.Exists(workspace))
+        {
+            Directory.Delete(workspace, true);
+        }
+    }
+}
+
+static async Task TestJsonlEventLogWritesTypedEvents()
+{
+    var workspace = Path.Combine(Path.GetTempPath(), "agent-event-log-" + Guid.NewGuid().ToString("n"));
+    Directory.CreateDirectory(workspace);
+
+    try
+    {
+        var log = new JsonlEventLog(workspace);
+        await log.AppendAsync(new AgentEventRecord(
+            "s1",
+            "tool_call",
+            DateTimeOffset.UtcNow,
+            "run test",
+            "echo",
+            true,
+            new Dictionary<string, string> { ["step"] = "1" }), CancellationToken.None);
+
+        var path = Path.Combine(workspace, ".evoloop", "storage", "events.jsonl");
+        Assert(File.Exists(path), "Expected JSONL event log file to exist.");
+        var content = await File.ReadAllTextAsync(path);
+        Assert(content.Contains("\"EventType\":\"tool_call\"", StringComparison.Ordinal), "Expected typed event payload in JSONL log.");
+        Assert(content.Contains("\"ToolName\":\"echo\"", StringComparison.Ordinal), "Expected tool name in JSONL log.");
+    }
+    finally
+    {
+        if (Directory.Exists(workspace))
+        {
+            Directory.Delete(workspace, true);
+        }
+    }
+}
+
 static void Assert(bool condition, string message)
 {
     if (!condition)
@@ -1204,6 +1344,7 @@ internal sealed class FakeMemoryStore : IWorkspaceMemoryStore
 internal sealed class EchoTool : ITool
 {
     public string Name => "echo";
+    public ToolMetadata Metadata => new(ToolRiskLevel.Low, ToolCategory.Status, false, Array.Empty<string>());
 
     public ToolSchema Schema => new("Echo value", new[] { "value" }, new Dictionary<string, string>());
 

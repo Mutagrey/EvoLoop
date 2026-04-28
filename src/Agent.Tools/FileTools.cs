@@ -1,4 +1,3 @@
-using System.Security.Cryptography;
 using System.Text;
 using Agent.Core;
 
@@ -7,6 +6,7 @@ namespace Agent.Tools;
 public sealed class FsListTool : ITool
 {
     public string Name => "fs_list";
+    public ToolMetadata Metadata => new(ToolRiskLevel.Low, ToolCategory.FileRead, false, Array.Empty<string>());
 
     public ToolSchema Schema => new(
         "List directory entries.",
@@ -60,6 +60,7 @@ public sealed class FsListTool : ITool
 public sealed class FsReadTool : ITool
 {
     public string Name => "fs_read";
+    public ToolMetadata Metadata => new(ToolRiskLevel.Low, ToolCategory.FileRead, false, Array.Empty<string>());
 
     public ToolSchema Schema => new(
         "Read file content.",
@@ -122,6 +123,7 @@ public sealed class FsReadTool : ITool
 public sealed class FsWriteTool : ITool
 {
     public string Name => "fs_write";
+    public ToolMetadata Metadata => new(ToolRiskLevel.Medium, ToolCategory.FileWrite, true, new[] { "workspace_write" });
 
     public ToolSchema Schema => new(
         "Write file content.",
@@ -146,44 +148,17 @@ public sealed class FsWriteTool : ITool
             return new ToolResult(false, "Missing required argument: path");
         }
 
-        var fullPath = ToolPath.ResolveInWorkspace(context.WorkspaceRoot, path);
-
-        if (!File.Exists(fullPath) && !createIfMissing)
-        {
-            return new ToolResult(false, "File does not exist and create_if_missing=false.");
-        }
-
-        if (File.Exists(fullPath) && !string.IsNullOrWhiteSpace(expectedHash))
-        {
-            var actual = await ComputeSha256Async(fullPath, ct);
-            if (!actual.Equals(expectedHash, StringComparison.OrdinalIgnoreCase))
-            {
-                return new ToolResult(false, $"Hash mismatch. expected_hash={expectedHash}, actual={actual}");
-            }
-        }
-
-        var directory = Path.GetDirectoryName(fullPath);
-        if (!string.IsNullOrWhiteSpace(directory) && !Directory.Exists(directory))
-        {
-            Directory.CreateDirectory(directory);
-        }
-
-        await File.WriteAllTextAsync(fullPath, content, Encoding.UTF8, ct);
-        return new ToolResult(true, $"Wrote file: {path}");
-    }
-
-    private static async Task<string> ComputeSha256Async(string filePath, CancellationToken ct)
-    {
-        await using var stream = File.OpenRead(filePath);
-        using var sha = SHA256.Create();
-        var hash = await sha.ComputeHashAsync(stream, ct);
-        return Convert.ToHexString(hash);
+        return await context.PatchService.WriteFileAsync(
+            new FileWriteRequest(path, content, createIfMissing, expectedHash),
+            context,
+            ct);
     }
 }
 
 public sealed class FsPatchTool : ITool
 {
     public string Name => "fs_patch";
+    public ToolMetadata Metadata => new(ToolRiskLevel.High, ToolCategory.FileWrite, true, new[] { "workspace_write" });
 
     public ToolSchema Schema => new(
         "Apply a unified diff patch using git apply, or write full content fallback.",
@@ -192,7 +167,8 @@ public sealed class FsPatchTool : ITool
         {
             ["path"] = "Target file path relative to workspace.",
             ["unified_diff"] = "Unified diff text.",
-            ["content"] = "Fallback full replacement content if unified_diff is not provided."
+            ["content"] = "Fallback full replacement content if unified_diff is not provided.",
+            ["expected_hash"] = "SHA256 hash precondition of the current file content."
         });
 
     public async Task<ToolResult> ExecuteAsync(ToolCall call, ToolContext context, CancellationToken ct)
@@ -203,64 +179,20 @@ public sealed class FsPatchTool : ITool
             return new ToolResult(false, "Missing required argument: path");
         }
 
-        var fullPath = ToolPath.ResolveInWorkspace(context.WorkspaceRoot, path);
         var diff = ToolArgumentReader.GetString(call.Arguments, "unified_diff");
-
-        if (!string.IsNullOrWhiteSpace(diff))
-        {
-            var tempPatch = Path.Combine(context.WorkspaceRoot, ".evoloop", "tmp", $"patch-{Guid.NewGuid():n}.diff");
-            var dir = Path.GetDirectoryName(tempPatch);
-            if (!string.IsNullOrWhiteSpace(dir))
-            {
-                Directory.CreateDirectory(dir);
-            }
-
-            await File.WriteAllTextAsync(tempPatch, diff, Encoding.UTF8, ct);
-            try
-            {
-                var result = await ProcessRunner.RunAsync(
-                    "git",
-                    new[] { "apply", "--whitespace=nowarn", tempPatch },
-                    context.WorkspaceRoot,
-                    ct,
-                    context.Config.Runtime.MaxOutputBytes);
-
-                if (!result.Success)
-                {
-                    return new ToolResult(false, "Patch apply failed.", result.StdOut, result.StdErr);
-                }
-
-                return new ToolResult(true, $"Applied patch for {path}.", result.StdOut, result.StdErr);
-            }
-            finally
-            {
-                if (File.Exists(tempPatch))
-                {
-                    File.Delete(tempPatch);
-                }
-            }
-        }
-
         var content = ToolArgumentReader.GetString(call.Arguments, "content");
-        if (content is null)
-        {
-            return new ToolResult(false, "Provide unified_diff or content.");
-        }
-
-        var fileDir = Path.GetDirectoryName(fullPath);
-        if (!string.IsNullOrWhiteSpace(fileDir) && !Directory.Exists(fileDir))
-        {
-            Directory.CreateDirectory(fileDir);
-        }
-
-        await File.WriteAllTextAsync(fullPath, content, Encoding.UTF8, ct);
-        return new ToolResult(true, $"Patched file via content fallback: {path}");
+        var expectedHash = ToolArgumentReader.GetString(call.Arguments, "expected_hash");
+        return await context.PatchService.ApplyPatchAsync(
+            new FilePatchRequest(path, diff, content, expectedHash),
+            context,
+            ct);
     }
 }
 
 public sealed class FsDeleteTool : ITool
 {
     public string Name => "fs_delete";
+    public ToolMetadata Metadata => new(ToolRiskLevel.Critical, ToolCategory.FileWrite, true, new[] { "workspace_write" });
 
     public ToolSchema Schema => new(
         "Delete file or directory.",
@@ -271,29 +203,15 @@ public sealed class FsDeleteTool : ITool
             ["recursive"] = "Delete directory recursively."
         });
 
-    public Task<ToolResult> ExecuteAsync(ToolCall call, ToolContext context, CancellationToken ct)
+    public async Task<ToolResult> ExecuteAsync(ToolCall call, ToolContext context, CancellationToken ct)
     {
         var path = ToolArgumentReader.GetString(call.Arguments, "path") ?? string.Empty;
         if (string.IsNullOrWhiteSpace(path))
         {
-            return Task.FromResult(new ToolResult(false, "Missing required argument: path"));
+            return new ToolResult(false, "Missing required argument: path");
         }
 
         var recursive = ToolArgumentReader.GetBool(call.Arguments, "recursive", false);
-        var fullPath = ToolPath.ResolveInWorkspace(context.WorkspaceRoot, path);
-
-        if (File.Exists(fullPath))
-        {
-            File.Delete(fullPath);
-            return Task.FromResult(new ToolResult(true, $"Deleted file: {path}"));
-        }
-
-        if (Directory.Exists(fullPath))
-        {
-            Directory.Delete(fullPath, recursive);
-            return Task.FromResult(new ToolResult(true, $"Deleted directory: {path}"));
-        }
-
-        return Task.FromResult(new ToolResult(false, $"Path not found: {path}"));
+        return await context.PatchService.DeleteAsync(new FileDeleteRequest(path, recursive), context, ct);
     }
 }

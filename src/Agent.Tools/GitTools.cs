@@ -5,6 +5,7 @@ namespace Agent.Tools;
 public sealed class GitStatusTool : ITool
 {
     public string Name => "git_status";
+    public ToolMetadata Metadata => new(ToolRiskLevel.Low, ToolCategory.Git, false, new[] { "git" });
 
     public ToolSchema Schema => new(
         "Show git status.",
@@ -32,6 +33,7 @@ public sealed class GitStatusTool : ITool
 public sealed class GitDiffTool : ITool
 {
     public string Name => "git_diff";
+    public ToolMetadata Metadata => new(ToolRiskLevel.Low, ToolCategory.Git, false, new[] { "git" });
 
     public ToolSchema Schema => new(
         "Show git diff.",
@@ -78,6 +80,7 @@ public sealed class GitDiffTool : ITool
 public sealed class GitLogTool : ITool
 {
     public string Name => "git_log";
+    public ToolMetadata Metadata => new(ToolRiskLevel.Low, ToolCategory.Git, false, new[] { "git" });
 
     public ToolSchema Schema => new(
         "Show recent git commits.",
@@ -110,6 +113,7 @@ public sealed class GitLogTool : ITool
 public sealed class GitShowTool : ITool
 {
     public string Name => "git_show";
+    public ToolMetadata Metadata => new(ToolRiskLevel.Low, ToolCategory.Git, false, new[] { "git" });
 
     public ToolSchema Schema => new(
         "Show a commit or object.",
@@ -142,6 +146,7 @@ public sealed class GitShowTool : ITool
 public sealed class GitAddTool : ITool
 {
     public string Name => "git_add";
+    public ToolMetadata Metadata => new(ToolRiskLevel.High, ToolCategory.Git, true, new[] { "git" });
 
     public ToolSchema Schema => new(
         "Stage files.",
@@ -174,6 +179,7 @@ public sealed class GitAddTool : ITool
 public sealed class GitCommitTool : ITool
 {
     public string Name => "git_commit";
+    public ToolMetadata Metadata => new(ToolRiskLevel.Critical, ToolCategory.Git, true, new[] { "git" });
 
     public ToolSchema Schema => new(
         "Create git commit.",

@@ -398,6 +398,7 @@ public sealed class HybridSearchService : ISearchService
 public sealed class SearchLexicalTool : ITool
 {
     public string Name => "search_lexical";
+    public ToolMetadata Metadata => new(ToolRiskLevel.Low, ToolCategory.Search, false, Array.Empty<string>());
 
     public ToolSchema Schema => new(
         "Search workspace using lexical matching.",
@@ -428,7 +429,10 @@ public sealed class SearchLexicalTool : ITool
             ToolArgumentReader.GetBool(call.Arguments, "include_hidden", false));
 
         var hits = await context.SearchService.LexicalAsync(request, ct);
-        return new ToolResult(true, $"Lexical search returned {hits.Count} hits.", FormatHits(hits));
+        var modeSuffix = context.Capabilities.RipgrepAvailable
+            ? "rg-enabled"
+            : "fallback scanner (rg unavailable)";
+        return new ToolResult(true, $"Lexical search returned {hits.Count} hits via {modeSuffix}.", FormatHits(hits));
     }
 
     private static string FormatHits(IReadOnlyList<SearchHit> hits)
@@ -446,6 +450,7 @@ public sealed class SearchLexicalTool : ITool
 public sealed class SearchSemanticTool : ITool
 {
     public string Name => "search_semantic";
+    public ToolMetadata Metadata => new(ToolRiskLevel.Low, ToolCategory.Search, false, new[] { "model" });
 
     public ToolSchema Schema => new(
         "Semantic-like search using lexical retrieval + LLM rerank.",
@@ -478,7 +483,19 @@ public sealed class SearchSemanticTool : ITool
             false,
             false), ct);
 
-        var reranked = await context.SearchService.RerankAsync(task, lexical, ct);
+        IReadOnlyList<SearchHit> reranked;
+        string mode;
+        if (!context.Capabilities.CanRunAgentTasks || context.ExecutionMode == AgentExecutionMode.Review)
+        {
+            reranked = lexical;
+            mode = "lexical-only fallback (model rerank unavailable)";
+        }
+        else
+        {
+            reranked = await context.SearchService.RerankAsync(task, lexical, ct);
+            mode = "lexical retrieval + model rerank";
+        }
+
         var top = reranked.Take(maxResults).ToList();
 
         var sb = new StringBuilder();
@@ -487,7 +504,7 @@ public sealed class SearchSemanticTool : ITool
             sb.AppendLine($"{hit.FilePath}:{hit.Line} [lex={hit.LexicalScore:F3} sem={hit.SemanticScore:F3} final={hit.FinalScore:F3}] {hit.Snippet}");
         }
 
-        return new ToolResult(true, $"Semantic search returned {top.Count} hits.", sb.ToString());
+        return new ToolResult(true, $"Semantic search returned {top.Count} hits via {mode}.", sb.ToString());
     }
 }
 

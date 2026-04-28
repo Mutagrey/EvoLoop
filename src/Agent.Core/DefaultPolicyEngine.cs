@@ -4,15 +4,26 @@ public sealed class DefaultPolicyEngine : IPolicyEngine
 {
     private readonly AgentConfig _config;
     private readonly HashSet<string> _allowedNetworkHosts;
+    private readonly IReadOnlyDictionary<string, ToolMetadata> _toolMetadata;
+    private readonly ICommandPolicy _commandPolicy;
 
-    public DefaultPolicyEngine(AgentConfig config)
+    public DefaultPolicyEngine(AgentConfig config, ICommandPolicy? commandPolicy = null)
+        : this(Array.Empty<ITool>(), config, commandPolicy)
+    {
+    }
+
+    public DefaultPolicyEngine(IEnumerable<ITool> tools, AgentConfig config, ICommandPolicy? commandPolicy = null)
     {
         _config = config;
         _allowedNetworkHosts = BuildAllowedNetworkHosts(config);
+        _commandPolicy = commandPolicy ?? new DefaultCommandPolicy();
+        _toolMetadata = tools.ToDictionary(t => t.Name, t => t.Metadata, StringComparer.OrdinalIgnoreCase);
     }
 
     public PolicyDecision Evaluate(ToolCall call, ToolContext context)
     {
+        var metadata = ResolveMetadata(call.Name);
+
         if (_config.Safety.DenyOutsideWorkspace)
         {
             if (HasPathOutsideWorkspace(call, context.WorkspaceRoot))
@@ -21,29 +32,35 @@ public sealed class DefaultPolicyEngine : IPolicyEngine
             }
         }
 
-        if (call.Name.StartsWith("fs_", StringComparison.OrdinalIgnoreCase) &&
-            (call.Name.Contains("write", StringComparison.OrdinalIgnoreCase) ||
-             call.Name.Contains("patch", StringComparison.OrdinalIgnoreCase) ||
-             call.Name.Contains("delete", StringComparison.OrdinalIgnoreCase)) &&
-            _config.Safety.RequireApprovalForWrites)
+        if ((context.ExecutionMode == AgentExecutionMode.Plan || context.ExecutionMode == AgentExecutionMode.Review) &&
+            (metadata.MutatesWorkspace || metadata.Category == ToolCategory.Shell))
         {
-            return new PolicyDecision(PolicyDecisionKind.RequireApproval, "File mutation requires user approval.");
+            return new PolicyDecision(PolicyDecisionKind.Deny, $"{context.ExecutionMode} mode does not allow workspace mutations or shell execution.");
         }
 
-        if (call.Name.StartsWith("git_", StringComparison.OrdinalIgnoreCase) &&
-            (call.Name.Equals("git_add", StringComparison.OrdinalIgnoreCase) ||
-             call.Name.Equals("git_commit", StringComparison.OrdinalIgnoreCase)) &&
-            _config.Safety.RequireApprovalForCommits)
+        if (context.ApprovalMode == ApprovalPolicyMode.ReadOnly &&
+            (metadata.MutatesWorkspace || metadata.Category == ToolCategory.Shell))
         {
-            return new PolicyDecision(PolicyDecisionKind.RequireApproval, "Git staging/commit requires user approval.");
+            return new PolicyDecision(PolicyDecisionKind.Deny, "Read-only approval mode blocks workspace mutations and shell execution.");
         }
 
-        if (call.Name.Equals("exec_shell", StringComparison.OrdinalIgnoreCase))
+        if (metadata.MutatesWorkspace && HasProtectedMutationPath(call, context.WorkspaceRoot))
+        {
+            return new PolicyDecision(PolicyDecisionKind.Deny, "Target path is protected by workspace safety policy.");
+        }
+
+        if (metadata.Category == ToolCategory.Shell)
         {
             var command = ToolArgumentReader.GetString(call.Arguments, "command");
             if (string.IsNullOrWhiteSpace(command))
             {
                 return new PolicyDecision(PolicyDecisionKind.Deny, "Shell command is empty.");
+            }
+
+            var commandDecision = _commandPolicy.Evaluate(command, context, metadata);
+            if (commandDecision.Kind != PolicyDecisionKind.Allow)
+            {
+                return new PolicyDecision(commandDecision.Kind, commandDecision.Reason);
             }
 
             if (_config.Safety.OfflineStrictMode && IsNetworkShellCommand(command))
@@ -66,13 +83,64 @@ public sealed class DefaultPolicyEngine : IPolicyEngine
                 return new PolicyDecision(PolicyDecisionKind.Deny, "Shell command matches denied pattern.");
             }
 
+            if (context.ApprovalMode == ApprovalPolicyMode.WorkspaceWrite)
+            {
+                return new PolicyDecision(PolicyDecisionKind.RequireApproval, "WorkspaceWrite mode requires approval for shell commands.");
+            }
+
             if (_config.Safety.RequireApprovalForRiskyShell && IsRiskyShell(command))
             {
                 return new PolicyDecision(PolicyDecisionKind.RequireApproval, "Risky shell command requires approval.");
             }
         }
 
+        if (metadata.MutatesWorkspace &&
+            context.ApprovalMode == ApprovalPolicyMode.WorkspaceWrite &&
+            _config.Safety.RequireApprovalForWrites)
+        {
+            return new PolicyDecision(PolicyDecisionKind.RequireApproval, "File mutation requires user approval.");
+        }
+
+        if (metadata.Category == ToolCategory.Git &&
+            call.Name is "git_add" or "git_commit")
+        {
+            if (context.ApprovalMode == ApprovalPolicyMode.WorkspaceWrite || context.ApprovalMode == ApprovalPolicyMode.AutoEdit)
+            {
+                if (_config.Safety.RequireApprovalForCommits)
+                {
+                    return new PolicyDecision(PolicyDecisionKind.RequireApproval, "Git staging/commit requires user approval.");
+                }
+            }
+        }
+
         return new PolicyDecision(PolicyDecisionKind.Allow, "Allowed by default policy.");
+    }
+
+    private ToolMetadata ResolveMetadata(string toolName)
+    {
+        if (_toolMetadata.TryGetValue(toolName, out var metadata))
+        {
+            return metadata;
+        }
+
+        if (toolName.StartsWith("fs_", StringComparison.OrdinalIgnoreCase))
+        {
+            var mutates = toolName is "fs_write" or "fs_patch" or "fs_delete";
+            return new ToolMetadata(mutates ? ToolRiskLevel.High : ToolRiskLevel.Low, mutates ? ToolCategory.FileWrite : ToolCategory.FileRead, mutates, Array.Empty<string>());
+        }
+
+        if (toolName.StartsWith("git_", StringComparison.OrdinalIgnoreCase))
+        {
+            var mutates = toolName is "git_add" or "git_commit";
+            return new ToolMetadata(mutates ? ToolRiskLevel.High : ToolRiskLevel.Low, ToolCategory.Git, mutates, new[] { "git" });
+        }
+
+        if (toolName.Equals("exec_shell", StringComparison.OrdinalIgnoreCase))
+        {
+            return new ToolMetadata(ToolRiskLevel.Critical, ToolCategory.Shell, false, new[] { "shell" }, IsFallbackOnly: true);
+        }
+
+        return new ToolMetadata(ToolRiskLevel.High, ToolCategory.Status, false, Array.Empty<string>());
     }
 
     private static bool HasPathOutsideWorkspace(ToolCall call, string workspaceRoot)
@@ -104,6 +172,25 @@ public sealed class DefaultPolicyEngine : IPolicyEngine
         }
 
         return false;
+    }
+
+    private static bool HasProtectedMutationPath(ToolCall call, string workspaceRoot)
+    {
+        var path = ToolArgumentReader.GetString(call.Arguments, "path");
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return false;
+        }
+
+        try
+        {
+            var resolved = PathSafety.ResolveInWorkspace(workspaceRoot, path, requireExistingPath: false, allowProtectedPaths: false);
+            return PathSafety.IsProtectedPath(workspaceRoot, resolved);
+        }
+        catch (InvalidOperationException)
+        {
+            return true;
+        }
     }
 
     private static bool IsRiskyShell(string command)

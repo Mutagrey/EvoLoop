@@ -21,7 +21,7 @@ public static class Program
             var workspace = await ResolveWorkspaceRootAsync(requestedWorkspace, CancellationToken.None);
             var config = BuildEffectiveConfig(AgentConfigLoader.LoadOrCreate(command.ConfigPath), command);
             var useColor = command.NoColor ? false : config.Ui.UseColor;
-            var renderer = new AnsiRenderer(useColor);
+            var renderer = new AnsiRenderer(useColor, config.Ui.CompactMode);
             var capabilities = await RuntimeCapabilityProbe.ProbeAsync(config, workspace, CancellationToken.None);
 
             if (!workspace.Equals(requestedWorkspace, StringComparison.OrdinalIgnoreCase))
@@ -62,10 +62,14 @@ public static class Program
                     $"Model execution is unavailable because the agent is running in '{capabilities.ModeLabel}' mode. Run 'agent doctor' to inspect gateway and environment status.");
             }
 
-            var searchService = new HybridSearchService(modelRouter, config, workspace);
-            var contextFactory = new DefaultToolContextFactory(config, searchService, capabilities);
             var tools = ToolCatalog.CreateDefaultTools();
-            var policy = new DefaultPolicyEngine(config);
+            var patchService = new WorkspacePatchService();
+            IEventLog eventLog = capabilities.WorkspaceWritable
+                ? new JsonlEventLog(workspace)
+                : NullEventLog.Instance;
+            var searchService = new HybridSearchService(modelRouter, config, workspace);
+            var contextFactory = new DefaultToolContextFactory(config, searchService, patchService, eventLog, capabilities);
+            var policy = new DefaultPolicyEngine(tools, config);
             var approval = new ConsoleApprovalService(renderer);
             IEventStore eventStore = capabilities.WorkspaceWritable
                 ? new HybridEventStore(workspace)
@@ -76,19 +80,36 @@ public static class Program
             var loop = new ReActAgentLoop(modelRouter, tools, policy, approval, eventStore, contextFactory, config, memoryStore);
             try
             {
-                if (command.Mode == CliMode.Run)
+                if (command.Mode is CliMode.Run or CliMode.Plan or CliMode.Review)
                 {
-                    if (string.IsNullOrWhiteSpace(command.Task))
+                    var task = command.Mode == CliMode.Review
+                        ? BuildReviewTask(command.Task)
+                        : command.Task;
+                    if (string.IsNullOrWhiteSpace(task))
                     {
-                        renderer.WriteError("Missing task. Usage: agent run \"your task\" [--profile reasoning|fast|fallback]");
+                        renderer.WriteError("Missing task. Usage: agent run|plan \"your task\" [--profile reasoning|fast|fallback]");
                         return 2;
                     }
 
-                    var result = await RunTaskAsync(loop, renderer, command.Task, workspace, command.Profile, capabilities);
+                    var result = await RunTaskAsync(
+                        loop,
+                        renderer,
+                        task,
+                        workspace,
+                        command.Profile,
+                        capabilities,
+                        command.Mode switch
+                        {
+                            CliMode.Plan => AgentExecutionMode.Plan,
+                            CliMode.Review => AgentExecutionMode.Review,
+                            _ => AgentExecutionMode.Run
+                        },
+                        config.Safety.DefaultApprovalMode,
+                        patchService);
                     return result.Success ? 0 : 1;
                 }
 
-                await RunReplAsync(loop, tools, renderer, config, workspace, command.Profile, memoryStore, capabilities);
+                await RunReplAsync(loop, tools, renderer, config, workspace, command.Profile, memoryStore, capabilities, patchService);
                 return 0;
             }
             finally
@@ -187,6 +208,7 @@ public static class Program
                 RequireApprovalForRiskyShell = safety.RequireApprovalForRiskyShell,
                 DenyOutsideWorkspace = safety.DenyOutsideWorkspace,
                 OfflineStrictMode = true,
+                DefaultApprovalMode = safety.DefaultApprovalMode,
                 AllowedNetworkHosts = allowedHosts,
                 DeniedShellPatterns = safety.DeniedShellPatterns
             }
@@ -201,19 +223,21 @@ public static class Program
         string workspace,
         string profile,
         IWorkspaceMemoryStore memoryStore,
-        RuntimeCapabilities capabilities)
+        RuntimeCapabilities capabilities,
+        IPatchService patchService)
     {
         renderer.WriteHeader("EvoLoop Agent CLI");
         renderer.WritePanel(
             "Session",
-            $"Workspace: {workspace}\nProfile: {profile}\nMode: {capabilities.ModeLabel}\nCommands: /task, /status, /tools, /history, /memory, /cmdlog, /config, /doctor, /exit\nRecall: !N");
+            $"Workspace: {workspace}\nProfile: {profile}\nMode: {capabilities.ModeLabel}\nCommands: /task, /plan, /review, /status, /tools, /history, /memory, /cmdlog, /config, /doctor, /undo, /exit\nRecall: !N");
 
         AgentRunResult? lastRun = null;
+        AgentRunResult? lastPlan = null;
         var commandHistory = await ReplCommandHistory.OpenAsync(workspace, 300, CancellationToken.None);
 
         while (true)
         {
-            Console.Write("\nagent :: ");
+            Console.Write("\nagent> ");
             var input = Console.ReadLine();
             if (input is null)
             {
@@ -253,7 +277,41 @@ public static class Program
                 }
 
                 await commandHistory.AddAsync(task, CancellationToken.None);
-                lastRun = await RunTaskAsync(loop, renderer, task, workspace, profile, capabilities);
+                lastRun = await RunTaskAsync(loop, renderer, task, workspace, profile, capabilities, AgentExecutionMode.Run, config.Safety.DefaultApprovalMode, patchService);
+                continue;
+            }
+
+            if (input.StartsWith("/plan ", StringComparison.OrdinalIgnoreCase))
+            {
+                var task = input[6..].Trim();
+                if (string.IsNullOrWhiteSpace(task))
+                {
+                    renderer.WriteWarn("Plan task text is empty.");
+                    continue;
+                }
+
+                await commandHistory.AddAsync(input, CancellationToken.None);
+                lastPlan = await RunTaskAsync(loop, renderer, task, workspace, profile, capabilities, AgentExecutionMode.Plan, ApprovalPolicyMode.ReadOnly, patchService);
+                continue;
+            }
+
+            if (input.Equals("/plan", StringComparison.OrdinalIgnoreCase))
+            {
+                if (lastPlan is null)
+                {
+                    renderer.WriteInfo("No plan has been generated yet.");
+                }
+                else
+                {
+                    renderer.WritePanel("Last Plan", lastPlan.FinalMessage);
+                }
+                continue;
+            }
+
+            if (input.StartsWith("/review", StringComparison.OrdinalIgnoreCase))
+            {
+                var suffix = input.Length > 7 ? input[7..].Trim() : null;
+                lastRun = await RunTaskAsync(loop, renderer, BuildReviewTask(suffix), workspace, profile, capabilities, AgentExecutionMode.Review, ApprovalPolicyMode.ReadOnly, patchService);
                 continue;
             }
 
@@ -274,7 +332,7 @@ public static class Program
 
             if (input.Equals("/tools", StringComparison.OrdinalIgnoreCase))
             {
-                var body = string.Join(Environment.NewLine, tools.OrderBy(t => t.Name).Select(t => $"- {t.Name}: {t.Schema.Description}"));
+                var body = string.Join(Environment.NewLine, tools.OrderBy(t => t.Name).Select(t => $"- {t.Name}: {t.Schema.Description} | risk={t.Metadata.RiskLevel} | category={t.Metadata.Category}"));
                 renderer.WritePanel("Tools", body);
                 continue;
             }
@@ -344,6 +402,13 @@ public static class Program
                 continue;
             }
 
+            if (input.Equals("/undo", StringComparison.OrdinalIgnoreCase))
+            {
+                var undoResult = await patchService.UndoLastAsync(workspace, CancellationToken.None);
+                renderer.WritePanel(undoResult.Success ? "Undo" : "Undo Failed", undoResult.Message);
+                continue;
+            }
+
             if (input.Equals("/cmdlog", StringComparison.OrdinalIgnoreCase))
             {
                 renderer.WritePanel("Saved Commands", commandHistory.FormatRecent(30));
@@ -357,7 +422,7 @@ public static class Program
             }
 
             await commandHistory.AddAsync(input, CancellationToken.None);
-            lastRun = await RunTaskAsync(loop, renderer, input, workspace, profile, capabilities);
+            lastRun = await RunTaskAsync(loop, renderer, input, workspace, profile, capabilities, AgentExecutionMode.Run, config.Safety.DefaultApprovalMode, patchService);
         }
 
         renderer.WriteInfo("Goodbye.");
@@ -369,10 +434,18 @@ public static class Program
         string task,
         string workspace,
         string profile,
-        RuntimeCapabilities capabilities)
+        RuntimeCapabilities capabilities,
+        AgentExecutionMode executionMode,
+        ApprovalPolicyMode approvalMode,
+        IPatchService patchService)
     {
         if (!capabilities.CanRunAgentTasks)
         {
+            if (executionMode == AgentExecutionMode.Review)
+            {
+                return await RunLocalReviewAsync(renderer, workspace, capabilities, patchService);
+            }
+
             renderer.WriteError(
                 $"Agent task execution is unavailable in '{capabilities.ModeLabel}' mode. Run 'agent doctor' to inspect gateway connectivity and environment restrictions.");
 
@@ -392,6 +465,8 @@ public static class Program
             task,
             workspace,
             profile,
+            executionMode,
+            approvalMode,
             null,
             observer),
             CancellationToken.None);
@@ -403,6 +478,57 @@ public static class Program
             $"Session: {result.SessionId}\nSteps: {result.Steps}\n\n{result.FinalMessage}");
 
         return result;
+    }
+
+    private static string BuildReviewTask(string? suffix)
+    {
+        var baseTask = "Review current workspace changes. Prefer git_diff if git is available; otherwise use workspace_snapshot_diff. Prioritize bugs, regressions, risky behavior changes, and missing tests.";
+        return string.IsNullOrWhiteSpace(suffix) ? baseTask : baseTask + "\nFocus: " + suffix.Trim();
+    }
+
+    private static async Task<AgentRunResult> RunLocalReviewAsync(
+        AnsiRenderer renderer,
+        string workspace,
+        RuntimeCapabilities capabilities,
+        IPatchService patchService)
+    {
+        var summary = new StringBuilder();
+        if (capabilities.GitAvailable)
+        {
+            var status = await ProcessRunner.RunAsync("git", new[] { "status", "--short", "--branch" }, workspace, CancellationToken.None, 32 * 1024);
+            var diff = await ProcessRunner.RunAsync("git", new[] { "diff", "--stat" }, workspace, CancellationToken.None, 32 * 1024);
+            summary.AppendLine("git status:");
+            summary.AppendLine(string.IsNullOrWhiteSpace(status.StdOut) ? "<empty>" : status.StdOut.Trim());
+            summary.AppendLine();
+            summary.AppendLine("git diff --stat:");
+            summary.AppendLine(string.IsNullOrWhiteSpace(diff.StdOut) ? "<empty>" : diff.StdOut.Trim());
+        }
+        else
+        {
+            var snapshotResult = await new WorkspaceSnapshotDiffTool().ExecuteAsync(
+                new ToolCall("workspace_snapshot_diff", default, "local review"),
+                new ToolContext(
+                    workspace,
+                    "local-review",
+                    "review",
+                    AgentExecutionMode.Review,
+                    ApprovalPolicyMode.ReadOnly,
+                    new AgentConfig(),
+                    new HybridSearchService(new DisabledModelClientRouter("disabled"), new AgentConfig(), workspace),
+                    capabilities,
+                    patchService,
+                    NullEventLog.Instance),
+                CancellationToken.None);
+
+            summary.AppendLine(snapshotResult.Message);
+            if (!string.IsNullOrWhiteSpace(snapshotResult.StdOut))
+            {
+                summary.AppendLine(snapshotResult.StdOut);
+            }
+        }
+
+        renderer.WritePanel("Review", summary.ToString().TrimEnd());
+        return new AgentRunResult(true, "Local review summary generated without model execution.", 0, "local-review", Array.Empty<SessionStep>());
     }
 
     private static void WriteCapabilityWarnings(AnsiRenderer renderer, RuntimeCapabilities capabilities)
@@ -460,6 +586,8 @@ internal enum CliMode
 {
     Interactive,
     Run,
+    Plan,
+    Review,
     Doctor
 }
 
@@ -494,6 +622,26 @@ internal sealed class CliArguments
                 i++;
             }
         }
+        else if (args.Length > 0 && args[0].Equals("plan", StringComparison.OrdinalIgnoreCase))
+        {
+            mode = CliMode.Plan;
+            i = 1;
+            if (i < args.Length && !args[i].StartsWith("--", StringComparison.Ordinal))
+            {
+                task = args[i];
+                i++;
+            }
+        }
+        else if (args.Length > 0 && args[0].Equals("review", StringComparison.OrdinalIgnoreCase))
+        {
+            mode = CliMode.Review;
+            i = 1;
+            if (i < args.Length && !args[i].StartsWith("--", StringComparison.Ordinal))
+            {
+                task = args[i];
+                i++;
+            }
+        }
         else if (args.Length > 0 && args[0].Equals("doctor", StringComparison.OrdinalIgnoreCase))
         {
             mode = CliMode.Doctor;
@@ -521,7 +669,9 @@ internal sealed class CliArguments
                     offlineStrict = true;
                     break;
                 default:
-                    if (mode == CliMode.Run && task is null && !arg.StartsWith("--", StringComparison.Ordinal))
+                    if ((mode == CliMode.Run || mode == CliMode.Plan || mode == CliMode.Review) &&
+                        task is null &&
+                        !arg.StartsWith("--", StringComparison.Ordinal))
                     {
                         task = arg;
                     }
@@ -678,7 +828,7 @@ internal sealed class ConsoleApprovalService : IApprovalService
 
         while (true)
         {
-            Console.Write("approve :: ");
+            Console.Write("approve> ");
             var input = Console.ReadLine();
             if (input is null)
             {
@@ -707,10 +857,13 @@ internal sealed class SpinnerObserver : IAgentRunObserver, IDisposable
     private readonly object _sync = new();
     private readonly List<string> _activityFeed = new();
     private readonly HashSet<string> _editedFiles = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _readFiles = new(StringComparer.OrdinalIgnoreCase);
     private readonly List<string> _ranCommands = new();
+    private readonly List<string> _searchNotes = new();
     private readonly List<string> _exploreNotes = new();
     private int? _lastAnnouncedStep;
     private DateTimeOffset _spinnerStartedAtUtc;
+    private DateTimeOffset _sessionStartedAtUtc;
     private CancellationTokenSource? _spinnerCts;
     private Task? _spinnerTask;
 
@@ -724,6 +877,7 @@ internal sealed class SpinnerObserver : IAgentRunObserver, IDisposable
         switch (evt.Type)
         {
             case AgentRunEventType.SessionStarted:
+                _sessionStartedAtUtc = DateTimeOffset.UtcNow;
                 _renderer.WriteStatus("SESSION", evt.Message, ConsoleColor.Cyan);
                 break;
             case AgentRunEventType.MemoryLoaded:
@@ -829,13 +983,34 @@ internal sealed class SpinnerObserver : IAgentRunObserver, IDisposable
 
     public async Task WriteActivitySummaryAsync(string workspace, CancellationToken ct)
     {
-        if (_activityFeed.Count == 0)
+        if (_activityFeed.Count == 0 &&
+            _editedFiles.Count == 0 &&
+            _readFiles.Count == 0 &&
+            _searchNotes.Count == 0 &&
+            _ranCommands.Count == 0)
         {
             return;
         }
 
         var sb = new StringBuilder();
         var diffStats = await ReadGitNumStatAsync(workspace, _editedFiles, ct);
+        var elapsed = _sessionStartedAtUtc == default
+            ? TimeSpan.Zero
+            : DateTimeOffset.UtcNow - _sessionStartedAtUtc;
+
+        sb.AppendLine(
+            $"Reads: {_readFiles.Count}  Searches: {_searchNotes.Count}  Edits: {_editedFiles.Count}  Commands: {_ranCommands.Distinct(StringComparer.OrdinalIgnoreCase).Count()}  Elapsed: {elapsed.TotalSeconds:0.0}s");
+        sb.AppendLine();
+
+        if (_readFiles.Count > 0)
+        {
+            sb.AppendLine($"Read ({_readFiles.Count})");
+            foreach (var file in _readFiles.OrderBy(x => x, StringComparer.OrdinalIgnoreCase).TakeLast(8))
+            {
+                sb.AppendLine($" - {file}");
+            }
+            sb.AppendLine();
+        }
 
         if (_editedFiles.Count > 0)
         {
@@ -854,10 +1029,10 @@ internal sealed class SpinnerObserver : IAgentRunObserver, IDisposable
             sb.AppendLine();
         }
 
-        if (_exploreNotes.Count > 0)
+        if (_exploreNotes.Count > 0 || _searchNotes.Count > 0)
         {
-            sb.AppendLine($"Explored {_exploreNotes.Count} item(s)");
-            foreach (var note in _exploreNotes.TakeLast(6))
+            sb.AppendLine($"Observed ({_exploreNotes.Count + _searchNotes.Count})");
+            foreach (var note in _exploreNotes.Concat(_searchNotes).TakeLast(8))
             {
                 sb.AppendLine($" - {note}");
             }
@@ -896,20 +1071,20 @@ internal sealed class SpinnerObserver : IAgentRunObserver, IDisposable
             _spinnerCts = new CancellationTokenSource();
             var token = _spinnerCts.Token;
             _spinnerStartedAtUtc = DateTimeOffset.UtcNow;
-            var hintText = string.IsNullOrWhiteSpace(hint) ? "Analyzing next action" : ToOneLine(hint, 90);
+            var hintText = SimplifySpinnerHint(string.IsNullOrWhiteSpace(hint) ? "Analyzing next action" : hint);
             var stepToken = TryParseStepProgress(hintText, out var current, out var total)
-                ? $"Step {current}/{total} {BuildStepBar(current, total)}"
-                : step.HasValue ? $"Step {step.Value}" : "Step";
+                ? $"step {current}/{total} {BuildStepBar(current, total)}"
+                : step.HasValue ? $"step {step.Value}" : "step";
             _spinnerTask = Task.Run(async () =>
             {
-                var frames = new[] { "|", "/", "-", "\\" };
+                var frames = new[] { ".  ", ".. ", "..." };
                 var index = 0;
                 var lastPrintedWidth = 0;
                 while (!token.IsCancellationRequested)
                 {
                     var elapsed = (DateTimeOffset.UtcNow - _spinnerStartedAtUtc).TotalSeconds;
                     var frame = frames[index++ % frames.Length];
-                    var line = $"{stepToken}  {hintText}  {elapsed,5:0.0}s {frame}";
+                    var line = $"{stepToken}  {hintText}  {elapsed,5:0.0}s  {frame}";
                     line = FitInline(line, GetConsoleWidth() - 1);
                     var padded = line.PadRight(Math.Max(line.Length, lastPrintedWidth));
                     Console.Write($"\r{padded}");
@@ -954,15 +1129,15 @@ internal sealed class SpinnerObserver : IAgentRunObserver, IDisposable
 
     private static string BuildStepBar(int current, int total)
     {
-        const int width = 18;
+        const int width = 16;
         if (total <= 0)
         {
-            return "[" + new string('-', width) + "]";
+            return "[" + new string('.', width) + "]";
         }
 
         var filled = (int)Math.Round((current / (double)total) * width);
         filled = Math.Clamp(filled, 0, width);
-        return "[" + new string('#', filled) + new string('-', width - filled) + "]";
+        return "[" + new string('=', filled) + new string('.', width - filled) + "]";
     }
 
     private static int GetConsoleWidth()
@@ -1032,9 +1207,35 @@ internal sealed class SpinnerObserver : IAgentRunObserver, IDisposable
         var normalized = ToOneLine(message, 220);
         _activityFeed.Add(normalized);
 
-        if (normalized.StartsWith("Edited ", StringComparison.OrdinalIgnoreCase))
+        if (normalized.StartsWith("Read ", StringComparison.OrdinalIgnoreCase))
         {
-            var file = NormalizePath(normalized["Edited ".Length..]);
+            var subject = normalized[(normalized.IndexOf(' ') + 1)..];
+            var file = NormalizePath(subject);
+            if (!string.IsNullOrWhiteSpace(file))
+            {
+                _readFiles.Add(file);
+            }
+            return;
+        }
+
+        if (normalized.StartsWith("Listed ", StringComparison.OrdinalIgnoreCase))
+        {
+            _exploreNotes.Add(normalized);
+            return;
+        }
+
+        if (normalized.StartsWith("Edited ", StringComparison.OrdinalIgnoreCase) ||
+            normalized.StartsWith("Patched ", StringComparison.OrdinalIgnoreCase) ||
+            normalized.StartsWith("Wrote ", StringComparison.OrdinalIgnoreCase))
+        {
+            var subject = normalized[(normalized.IndexOf(' ') + 1)..];
+            var statIndex = subject.IndexOf("  +", StringComparison.Ordinal);
+            if (statIndex >= 0)
+            {
+                subject = subject[..statIndex];
+            }
+
+            var file = NormalizePath(subject);
             if (!string.IsNullOrWhiteSpace(file))
             {
                 _editedFiles.Add(file);
@@ -1042,8 +1243,13 @@ internal sealed class SpinnerObserver : IAgentRunObserver, IDisposable
             return;
         }
 
-        if (normalized.StartsWith("Explored ", StringComparison.OrdinalIgnoreCase) ||
-            normalized.StartsWith("Searched ", StringComparison.OrdinalIgnoreCase))
+        if (normalized.StartsWith("Searched ", StringComparison.OrdinalIgnoreCase))
+        {
+            _searchNotes.Add(normalized);
+            return;
+        }
+
+        if (normalized.StartsWith("Explored ", StringComparison.OrdinalIgnoreCase))
         {
             _exploreNotes.Add(normalized);
             return;
@@ -1127,77 +1333,78 @@ internal sealed class SpinnerObserver : IAgentRunObserver, IDisposable
 
         return oneLine[..maxLen] + "...";
     }
+
+    private static string SimplifySpinnerHint(string hint)
+    {
+        var normalized = ToOneLine(hint, 110);
+        if (normalized.StartsWith("Step ", StringComparison.OrdinalIgnoreCase))
+        {
+            var separator = normalized.IndexOf(':');
+            if (separator >= 0 && separator + 1 < normalized.Length)
+            {
+                normalized = normalized[(separator + 1)..].Trim();
+            }
+        }
+
+        return normalized switch
+        {
+            "Model response received" => "processing model response",
+            _ => normalized.ToLowerInvariant()
+        };
+    }
 }
 
 internal sealed class AnsiRenderer
 {
     private const int MinFrameWidth = 64;
     private const int MaxFrameWidth = 120;
-    private const int StatusTagWidth = 12;
+    private const int StatusTagWidth = 9;
     private readonly bool _useColor;
-    private readonly bool _usePlainLayout;
+    private readonly bool _compactMode;
 
     public bool SupportsTransientOutput { get; }
 
-    public AnsiRenderer(bool useColor)
+    public AnsiRenderer(bool useColor, bool compactMode)
     {
         _useColor = useColor && SupportsAnsiColor();
-        _usePlainLayout = OperatingSystem.IsWindows() && !_useColor;
-        SupportsTransientOutput = !_usePlainLayout && !Console.IsOutputRedirected;
+        _compactMode = compactMode;
+        SupportsTransientOutput = !Console.IsOutputRedirected;
     }
 
     public void WriteHeader(string title)
     {
-        if (_usePlainLayout)
-        {
-            WriteRaw("== " + title.ToUpperInvariant() + " ==");
-            WriteRaw("Autonomous Coding Agent CLI");
-            return;
-        }
-
         var width = GetFrameWidth();
-        var top = "+" + new string('=', width - 2) + "+";
-        WriteRaw(Colorize(top, ConsoleColor.Cyan));
-        WriteFramedLine(title.ToUpperInvariant(), width, ConsoleColor.Cyan);
-        WriteFramedLine("Autonomous Coding Agent CLI", width, ConsoleColor.DarkCyan);
-        WriteRaw(Colorize(top, ConsoleColor.Cyan));
+        WriteRaw(Colorize(title, ConsoleColor.Cyan));
+        WriteRaw(Colorize("Autonomous coding agent CLI", ConsoleColor.DarkGray));
+        WriteRaw(Colorize(new string('-', width), ConsoleColor.DarkGray));
     }
 
     public void WritePanel(string title, string body)
     {
-        if (_usePlainLayout)
-        {
-            WriteRaw(string.Empty);
-            WriteRaw("[" + TruncateInline(title, 80) + "]");
-            foreach (var line in WrapText(body, Math.Max(40, GetFrameWidth() - 2)))
-            {
-                WriteRaw(line);
-            }
-            return;
-        }
-
         var width = GetFrameWidth();
-        var innerWidth = width - 4;
-        var safeTitle = TruncateInline(title, Math.Max(1, innerWidth - 2));
-        var top = "+-" + safeTitle + " " + new string('-', Math.Max(1, innerWidth - safeTitle.Length - 1)) + "+";
-        var bottom = "+" + new string('-', width - 2) + "+";
+        var safeTitle = TruncateInline(title, Math.Max(8, width / 3));
+        var separator = new string('-', Math.Max(8, width - safeTitle.Length - 1));
 
-        WriteRaw(Colorize(top, ConsoleColor.DarkGray));
-        foreach (var line in WrapText(body, innerWidth))
+        WriteRaw(string.Empty);
+        WriteRaw($"{Colorize(safeTitle.ToLowerInvariant(), ConsoleColor.Cyan)} {Colorize(separator, ConsoleColor.DarkGray)}");
+        foreach (var line in WrapText(body, width))
         {
-            WriteRaw($"| {line.PadRight(innerWidth)} |");
+            WriteRaw(line);
         }
-        WriteRaw(Colorize(bottom, ConsoleColor.DarkGray));
     }
 
     public void WriteStatus(string tag, string message, ConsoleColor color, int depth = 0, bool isLast = false)
     {
         depth = Math.Max(0, depth);
-        var timestamp = DateTime.Now.ToString("HH:mm:ss");
         var normalizedTag = NormalizeTag(tag);
-        var prefixPlain = $"[{timestamp}] [{normalizedTag}] ";
+        var timestamp = DateTime.Now.ToString("HH:mm:ss");
+        var prefixPlain = _compactMode
+            ? $"{normalizedTag} "
+            : $"{timestamp}  {normalizedTag} ";
         var prefixColored = _useColor
-            ? $"{Colorize($"[{timestamp}]", ConsoleColor.DarkGray)} {Colorize($"[{normalizedTag}]", color)} "
+            ? _compactMode
+                ? $"{Colorize(normalizedTag, color)} "
+                : $"{Colorize(timestamp, ConsoleColor.DarkGray)}  {Colorize(normalizedTag, color)} "
             : prefixPlain;
         var treePrefix = BuildTreePrefix(depth, isLast);
         var treePrefixColored = _useColor && treePrefix.Length > 0
@@ -1326,7 +1533,7 @@ internal sealed class AnsiRenderer
 
     private static string NormalizeTag(string tag)
     {
-        var clean = string.IsNullOrWhiteSpace(tag) ? "STATUS" : tag.Trim().ToUpperInvariant();
+        var clean = string.IsNullOrWhiteSpace(tag) ? "status" : tag.Trim().ToLowerInvariant();
         if (clean.Length > StatusTagWidth)
         {
             clean = clean[..StatusTagWidth];
@@ -1345,19 +1552,11 @@ internal sealed class AnsiRenderer
         var sb = new StringBuilder(depth * 3);
         for (var level = 1; level < depth; level++)
         {
-            sb.Append("|  ");
+            sb.Append("  ");
         }
 
-        sb.Append(isLast ? "`- " : "|- ");
+        sb.Append(isLast ? "\\- " : "|- ");
         return sb.ToString();
-    }
-
-    private void WriteFramedLine(string value, int width, ConsoleColor color)
-    {
-        var innerWidth = width - 4;
-        var text = TruncateInline(value, innerWidth);
-        var content = text.PadRight(innerWidth);
-        WriteRaw(Colorize($"| {content} |", color));
     }
 
     private static string TruncateInline(string value, int width)

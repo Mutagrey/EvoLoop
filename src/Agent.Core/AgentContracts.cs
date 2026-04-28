@@ -11,6 +11,7 @@ public interface ITool
 {
     string Name { get; }
     ToolSchema Schema { get; }
+    ToolMetadata Metadata { get; }
     Task<ToolResult> ExecuteAsync(ToolCall call, ToolContext context, CancellationToken ct);
 }
 
@@ -62,13 +63,59 @@ public interface ISearchService
 
 public interface IToolContextFactory
 {
-    ToolContext Create(string workspaceRoot, string sessionId, string profileName);
+    ToolContext Create(string workspaceRoot, string sessionId, string profileName, AgentExecutionMode executionMode, ApprovalPolicyMode approvalMode);
+}
+
+public interface IContextBuilder
+{
+    Task<IReadOnlyList<ModelMessage>> BuildInitialMessagesAsync(
+        AgentRunRequest request,
+        ToolContext context,
+        IWorkspaceMemoryStore memoryStore,
+        CancellationToken ct);
+}
+
+public interface IPromptBuilder
+{
+    string BuildSystemPrompt(IReadOnlyCollection<ITool> tools, ToolContext context);
+}
+
+public interface IToolTurnExecutor
+{
+    Task<ToolTurnExecutionResult> ExecuteAsync(
+        ToolExecutionRequest request,
+        CancellationToken ct);
+}
+
+public interface IEventLog
+{
+    Task AppendAsync(AgentEventRecord evt, CancellationToken ct);
+}
+
+public interface ICommandPolicy
+{
+    CommandPolicyDecision Evaluate(string command, ToolContext context, ToolMetadata metadata);
+}
+
+public interface IPatchService
+{
+    Task<ToolResult> WriteFileAsync(FileWriteRequest request, ToolContext context, CancellationToken ct);
+    Task<ToolResult> ApplyPatchAsync(FilePatchRequest request, ToolContext context, CancellationToken ct);
+    Task<ToolResult> DeleteAsync(FileDeleteRequest request, ToolContext context, CancellationToken ct);
+    Task<ToolResult> UndoLastAsync(string workspaceRoot, CancellationToken ct);
 }
 
 public sealed record ToolSchema(
     string Description,
     IReadOnlyList<string> RequiredFields,
     IReadOnlyDictionary<string, string> FieldDescriptions);
+
+public sealed record ToolMetadata(
+    ToolRiskLevel RiskLevel,
+    ToolCategory Category,
+    bool MutatesWorkspace,
+    IReadOnlyList<string> RequiresCapabilities,
+    bool IsFallbackOnly = false);
 
 public sealed record ToolCall(string Name, JsonElement Arguments, string Reason);
 
@@ -83,10 +130,73 @@ public sealed record ToolContext(
     string WorkspaceRoot,
     string SessionId,
     string ProfileName,
+    AgentExecutionMode ExecutionMode,
+    ApprovalPolicyMode ApprovalMode,
     AgentConfig Config,
     ISearchService SearchService,
     RuntimeCapabilities Capabilities,
-    Func<string, string, CancellationToken, Task<IReadOnlyList<SearchHit>>>? RerankFn = null);
+    IPatchService PatchService,
+    IEventLog EventLog,
+    Func<string, string, CancellationToken, Task<IReadOnlyList<SearchHit>>>? RerankFn = null)
+{
+    public ToolContext(
+        string WorkspaceRoot,
+        string SessionId,
+        string ProfileName,
+        AgentConfig Config,
+        ISearchService SearchService,
+        RuntimeCapabilities Capabilities)
+        : this(
+            WorkspaceRoot,
+            SessionId,
+            ProfileName,
+            AgentExecutionMode.Run,
+            ApprovalPolicyMode.WorkspaceWrite,
+            Config,
+            SearchService,
+            Capabilities,
+            NullPatchService.Instance,
+            NullEventLog.Instance)
+    {
+    }
+}
+
+public enum AgentExecutionMode
+{
+    Interactive,
+    Run,
+    Plan,
+    Review
+}
+
+public enum ApprovalPolicyMode
+{
+    ReadOnly,
+    WorkspaceWrite,
+    AutoEdit,
+    DangerFullAccess
+}
+
+public enum ToolRiskLevel
+{
+    Low,
+    Medium,
+    High,
+    Critical
+}
+
+public enum ToolCategory
+{
+    FileRead,
+    FileWrite,
+    Search,
+    Git,
+    Shell,
+    Planning,
+    Review,
+    Status,
+    Memory
+}
 
 public sealed record ModelCapabilities(bool SupportsStreaming, bool SupportsEmbeddings);
 
@@ -124,8 +234,21 @@ public sealed record AgentRunRequest(
     string Task,
     string WorkspaceRoot,
     string ProfileName,
+    AgentExecutionMode ExecutionMode,
+    ApprovalPolicyMode ApprovalMode,
     int? MaxSteps,
-    IAgentRunObserver? Observer = null);
+    IAgentRunObserver? Observer = null)
+{
+    public AgentRunRequest(
+        string Task,
+        string WorkspaceRoot,
+        string ProfileName,
+        int? MaxSteps,
+        IAgentRunObserver? Observer = null)
+        : this(Task, WorkspaceRoot, ProfileName, AgentExecutionMode.Run, ApprovalPolicyMode.WorkspaceWrite, MaxSteps, Observer)
+    {
+    }
+}
 
 public sealed record AgentRunResult(
     bool Success,
@@ -203,6 +326,55 @@ public sealed record SearchHit(
     double SemanticScore,
     double FinalScore);
 
+public sealed record AgentEventRecord(
+    string SessionId,
+    string EventType,
+    DateTimeOffset TimestampUtc,
+    string Message,
+    string? ToolName = null,
+    bool? Success = null,
+    IReadOnlyDictionary<string, string>? Data = null);
+
+public sealed record CommandPolicyDecision(
+    PolicyDecisionKind Kind,
+    string Reason,
+    IReadOnlyList<string>? CommandSegments = null);
+
+public sealed record FileWriteRequest(
+    string Path,
+    string Content,
+    bool CreateIfMissing,
+    string? ExpectedHash);
+
+public sealed record FilePatchRequest(
+    string Path,
+    string? UnifiedDiff,
+    string? Content,
+    string? ExpectedHash);
+
+public sealed record FileDeleteRequest(
+    string Path,
+    bool Recursive);
+
+public sealed record ToolExecutionRequest(
+    ITool Tool,
+    ToolCall Call,
+    ToolContext Context,
+    int Step,
+    string Action,
+    string Reasoning,
+    IPolicyEngine PolicyEngine,
+    IApprovalService ApprovalService,
+    IEventStore EventStore,
+    IAgentRunObserver Observer);
+
+public sealed record ToolTurnExecutionResult(
+    bool Executed,
+    bool Success,
+    ToolResult? Result,
+    SessionStep? Step,
+    string? ObservationMessage = null);
+
 public sealed class NullObserver : IAgentRunObserver
 {
     public static readonly NullObserver Instance = new();
@@ -239,6 +411,34 @@ public sealed class NullEventStore : IEventStore
 
     public Task CompleteSessionAsync(string sessionId, string finalStatus, CancellationToken ct)
         => Task.CompletedTask;
+}
+
+public sealed class NullEventLog : IEventLog
+{
+    public static readonly NullEventLog Instance = new();
+
+    private NullEventLog() { }
+
+    public Task AppendAsync(AgentEventRecord evt, CancellationToken ct) => Task.CompletedTask;
+}
+
+internal sealed class NullPatchService : IPatchService
+{
+    public static readonly NullPatchService Instance = new();
+
+    private NullPatchService() { }
+
+    public Task<ToolResult> WriteFileAsync(FileWriteRequest request, ToolContext context, CancellationToken ct)
+        => Task.FromResult(new ToolResult(false, "Patch service is unavailable."));
+
+    public Task<ToolResult> ApplyPatchAsync(FilePatchRequest request, ToolContext context, CancellationToken ct)
+        => Task.FromResult(new ToolResult(false, "Patch service is unavailable."));
+
+    public Task<ToolResult> DeleteAsync(FileDeleteRequest request, ToolContext context, CancellationToken ct)
+        => Task.FromResult(new ToolResult(false, "Patch service is unavailable."));
+
+    public Task<ToolResult> UndoLastAsync(string workspaceRoot, CancellationToken ct)
+        => Task.FromResult(new ToolResult(false, "Patch service is unavailable."));
 }
 
 public sealed class AgentConfig
@@ -293,6 +493,7 @@ public sealed class SafetyConfig
     public bool RequireApprovalForRiskyShell { get; init; } = true;
     public bool DenyOutsideWorkspace { get; init; } = true;
     public bool OfflineStrictMode { get; init; } = false;
+    public ApprovalPolicyMode DefaultApprovalMode { get; init; } = ApprovalPolicyMode.WorkspaceWrite;
     public List<string> AllowedNetworkHosts { get; init; } = new();
     public List<string> DeniedShellPatterns { get; init; } = new()
     {
@@ -336,10 +537,14 @@ public sealed class RuntimeConfig
     public int HistoryKeepTailMessages { get; init; } = 18;
     public int ObservationMaxChars { get; init; } = 6000;
     public bool AdaptivePromptingEnabled { get; init; } = true;
+    public int ContextProjectDocMaxChars { get; init; } = 10000;
+    public int ContextFileExcerptMaxChars { get; init; } = 8000;
+    public int ContextObservationBudgetChars { get; init; } = 5000;
+    public int ContextHistorySummaryChars { get; init; } = 7000;
 }
 
 public sealed class UiConfig
 {
     public bool UseColor { get; init; } = true;
-    public bool CompactMode { get; init; } = false;
+    public bool CompactMode { get; init; } = true;
 }

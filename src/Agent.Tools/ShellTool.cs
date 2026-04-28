@@ -5,6 +5,7 @@ namespace Agent.Tools;
 public sealed class ExecShellTool : ITool
 {
     public string Name => "exec_shell";
+    public ToolMetadata Metadata => new(ToolRiskLevel.Critical, ToolCategory.Shell, false, new[] { "shell" }, IsFallbackOnly: true);
 
     public ToolSchema Schema => new(
         "Execute a shell command in workspace.",

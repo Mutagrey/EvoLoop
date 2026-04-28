@@ -13,6 +13,8 @@ public static class ToolCatalog
             new FsWriteTool(),
             new FsPatchTool(),
             new FsDeleteTool(),
+            new WorkspaceUndoTool(),
+            new WorkspaceSnapshotDiffTool(),
             new GitStatusTool(),
             new GitDiffTool(),
             new GitLogTool(),

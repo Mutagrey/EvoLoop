@@ -15,6 +15,9 @@ public sealed class ReActAgentLoop : IAgentLoop
     private readonly IToolContextFactory _contextFactory;
     private readonly IReadOnlyDictionary<string, ITool> _tools;
     private readonly AgentConfig _config;
+    private readonly IContextBuilder _contextBuilder;
+    private readonly IPromptBuilder _promptBuilder;
+    private readonly IToolTurnExecutor _toolTurnExecutor;
 
     public ReActAgentLoop(
         IModelClientRouter modelRouter,
@@ -24,7 +27,10 @@ public sealed class ReActAgentLoop : IAgentLoop
         IEventStore eventStore,
         IToolContextFactory contextFactory,
         AgentConfig config,
-        IWorkspaceMemoryStore? memoryStore = null)
+        IWorkspaceMemoryStore? memoryStore = null,
+        IContextBuilder? contextBuilder = null,
+        IPromptBuilder? promptBuilder = null,
+        IToolTurnExecutor? toolTurnExecutor = null)
     {
         _modelRouter = modelRouter;
         _tools = tools.ToDictionary(t => t.Name, StringComparer.OrdinalIgnoreCase);
@@ -34,6 +40,9 @@ public sealed class ReActAgentLoop : IAgentLoop
         _memoryStore = memoryStore ?? NullWorkspaceMemoryStore.Instance;
         _contextFactory = contextFactory;
         _config = config;
+        _contextBuilder = contextBuilder ?? new DefaultContextBuilder();
+        _promptBuilder = promptBuilder ?? new DefaultPromptBuilder();
+        _toolTurnExecutor = toolTurnExecutor ?? new DefaultToolTurnExecutor();
     }
 
     public async Task<AgentRunResult> RunAsync(AgentRunRequest request, CancellationToken ct)
@@ -52,26 +61,29 @@ public sealed class ReActAgentLoop : IAgentLoop
         var profilePlan = BuildProfilePlan(request.ProfileName);
         var profileIndex = 0;
         var currentProfileName = profilePlan[profileIndex];
-        var context = _contextFactory.Create(request.WorkspaceRoot, session.SessionId, currentProfileName);
+        var context = _contextFactory.Create(
+            request.WorkspaceRoot,
+            session.SessionId,
+            currentProfileName,
+            request.ExecutionMode,
+            request.ApprovalMode);
+        await context.EventLog.AppendAsync(new AgentEventRecord(
+            session.SessionId,
+            "session_start",
+            DateTimeOffset.UtcNow,
+            request.Task,
+            null,
+            null,
+            new Dictionary<string, string>
+            {
+                ["profile"] = currentProfileName,
+                ["execution_mode"] = request.ExecutionMode.ToString(),
+                ["approval_mode"] = request.ApprovalMode.ToString()
+            }), ct);
         var modelClient = _modelRouter.GetClient(currentProfileName);
         var modelName = _modelRouter.ResolveModelName(currentProfileName);
 
-        var history = new List<ModelMessage>();
-        history.Add(new ModelMessage("user", BuildRuntimeContextMessage(context.Capabilities)));
-
-        if (_config.Runtime.MemoryEnabled)
-        {
-            var memoryContext = await _memoryStore.LoadContextAsync(request.WorkspaceRoot, request.Task, ct);
-            if (!string.IsNullOrWhiteSpace(memoryContext.Content))
-            {
-                history.Add(new ModelMessage("user", memoryContext.Content));
-                await observer.OnEventAsync(new AgentRunEvent(
-                    AgentRunEventType.MemoryLoaded,
-                    $"Loaded workspace memory context ({memoryContext.EntriesUsed} run snippets)."), ct);
-            }
-        }
-
-        history.Add(new ModelMessage("user", $"TASK:\n{request.Task}"));
+        var history = (await _contextBuilder.BuildInitialMessagesAsync(request, context, _memoryStore, ct)).ToList();
 
         var requiresToolBeforeFinal = TaskLikelyRequiresTools(request.Task);
         var toolStepsExecuted = 0;
@@ -110,7 +122,7 @@ public sealed class ReActAgentLoop : IAgentLoop
                         consecutiveFinalWithoutTools,
                         lastModelIssue)
                     : string.Empty;
-                var systemPrompt = BuildSystemPrompt(_tools.Values);
+                var systemPrompt = _promptBuilder.BuildSystemPrompt(_tools.Values.ToList(), context);
                 if (!string.IsNullOrWhiteSpace(adaptiveDirective))
                 {
                     systemPrompt += "\n\nADAPTIVE EXECUTION DIRECTIVE:\n" + adaptiveDirective;
@@ -129,6 +141,18 @@ public sealed class ReActAgentLoop : IAgentLoop
                         ["step"] = step.ToString(),
                         ["profile"] = currentProfileName
                     });
+
+                await context.EventLog.AppendAsync(new AgentEventRecord(
+                    session.SessionId,
+                    "llm_request",
+                    DateTimeOffset.UtcNow,
+                    $"profile={currentProfileName}; step={step}",
+                    null,
+                    null,
+                    new Dictionary<string, string>
+                    {
+                        ["model"] = modelName
+                    }), ct);
 
                 var modelResult = await modelClient.CompleteAsync(modelRequest, ct);
 
@@ -169,7 +193,7 @@ public sealed class ReActAgentLoop : IAgentLoop
                     else
                     {
                         if (consecutiveInvalidResponses >= GetSwitchThreshold(_config.Runtime.InvalidResponsesBeforeProfileSwitch) &&
-                            TrySwitchProfile(profilePlan, ref profileIndex, ref currentProfileName, ref modelClient, ref modelName, request.WorkspaceRoot, session.SessionId, ref context))
+                            TrySwitchProfile(profilePlan, ref profileIndex, ref currentProfileName, ref modelClient, ref modelName, request.WorkspaceRoot, session.SessionId, request.ExecutionMode, request.ApprovalMode, ref context))
                         {
                             consecutiveInvalidResponses = 0;
                             consecutiveFinalWithoutTools = 0;
@@ -238,7 +262,7 @@ public sealed class ReActAgentLoop : IAgentLoop
                         else
                         {
                             if (consecutiveFinalWithoutTools >= GetSwitchThreshold(_config.Runtime.FinalWithoutToolsBeforeProfileSwitch) &&
-                                TrySwitchProfile(profilePlan, ref profileIndex, ref currentProfileName, ref modelClient, ref modelName, request.WorkspaceRoot, session.SessionId, ref context))
+                                TrySwitchProfile(profilePlan, ref profileIndex, ref currentProfileName, ref modelClient, ref modelName, request.WorkspaceRoot, session.SessionId, request.ExecutionMode, request.ApprovalMode, ref context))
                             {
                                 consecutiveInvalidResponses = 0;
                                 consecutiveFinalWithoutTools = 0;
@@ -293,7 +317,7 @@ public sealed class ReActAgentLoop : IAgentLoop
                         step), ct);
 
                     if (consecutiveInvalidResponses >= GetSwitchThreshold(_config.Runtime.InvalidResponsesBeforeProfileSwitch) &&
-                        TrySwitchProfile(profilePlan, ref profileIndex, ref currentProfileName, ref modelClient, ref modelName, request.WorkspaceRoot, session.SessionId, ref context))
+                        TrySwitchProfile(profilePlan, ref profileIndex, ref currentProfileName, ref modelClient, ref modelName, request.WorkspaceRoot, session.SessionId, request.ExecutionMode, request.ApprovalMode, ref context))
                     {
                         consecutiveInvalidResponses = 0;
                         consecutiveFinalWithoutTools = 0;
@@ -377,7 +401,7 @@ public sealed class ReActAgentLoop : IAgentLoop
                         tool.Name), ct);
 
                     if (consecutiveInvalidResponses >= GetSwitchThreshold(_config.Runtime.InvalidResponsesBeforeProfileSwitch) &&
-                        TrySwitchProfile(profilePlan, ref profileIndex, ref currentProfileName, ref modelClient, ref modelName, request.WorkspaceRoot, session.SessionId, ref context))
+                        TrySwitchProfile(profilePlan, ref profileIndex, ref currentProfileName, ref modelClient, ref modelName, request.WorkspaceRoot, session.SessionId, request.ExecutionMode, request.ApprovalMode, ref context))
                     {
                         consecutiveInvalidResponses = 0;
                         consecutiveFinalWithoutTools = 0;
@@ -416,112 +440,27 @@ public sealed class ReActAgentLoop : IAgentLoop
                     tool.Name), ct);
 
                 var call = new ToolCall(tool.Name, decision.Arguments, decision.Reason);
-                var policyDecision = _policyEngine.Evaluate(call, context);
+                var turnResult = await _toolTurnExecutor.ExecuteAsync(new ToolExecutionRequest(
+                    tool,
+                    call,
+                    context,
+                    step,
+                    "tool",
+                    decision.Reason,
+                    _policyEngine,
+                    _approvalService,
+                    _eventStore,
+                    observer), ct);
 
-                if (policyDecision.Kind == PolicyDecisionKind.Deny)
+                history.Add(new ModelMessage("assistant", modelResult.Content));
+                if (!turnResult.Executed)
                 {
-                    lastModelIssue = "policy_denied";
-                    await observer.OnEventAsync(new AgentRunEvent(
-                        AgentRunEventType.PolicyDenied,
-                        policyDecision.Reason,
-                        step,
-                        tool.Name), ct);
-
-                    history.Add(new ModelMessage("assistant", modelResult.Content));
-                    history.Add(new ModelMessage("user", $"OBSERVATION: Policy denied this action: {policyDecision.Reason}"));
-
-                    var deniedStep = new SessionStep(
-                        session.SessionId,
-                        step,
-                        "tool",
-                        tool.Name,
-                        decision.Reason,
-                        false,
-                        "Policy denied",
-                        DateTimeOffset.UtcNow,
-                        0,
-                        policyDecision.Reason);
-
-                    trace.Add(deniedStep);
-                    await _eventStore.AppendStepAsync(deniedStep, ct);
+                    lastModelIssue = "policy_or_approval_blocked";
+                    history.Add(new ModelMessage("user", turnResult.ObservationMessage ?? "OBSERVATION: Tool execution was blocked."));
                     continue;
                 }
 
-                if (policyDecision.Kind == PolicyDecisionKind.RequireApproval)
-                {
-                    await observer.OnEventAsync(new AgentRunEvent(
-                        AgentRunEventType.ApprovalRequired,
-                        policyDecision.Reason,
-                        step,
-                        tool.Name), ct);
-
-                    var approved = await _approvalService.RequestApprovalAsync(new ApprovalRequest(
-                        tool.Name,
-                        policyDecision.Reason,
-                        PreviewArguments(decision.Arguments)), ct);
-
-                    if (!approved)
-                    {
-                        lastModelIssue = "approval_rejected";
-                        await observer.OnEventAsync(new AgentRunEvent(
-                            AgentRunEventType.ApprovalRejected,
-                            "User rejected action",
-                            step,
-                            tool.Name), ct);
-
-                        history.Add(new ModelMessage("assistant", modelResult.Content));
-                        history.Add(new ModelMessage("user", "OBSERVATION: User rejected this action. Choose a safer alternative."));
-
-                        var rejectedStep = new SessionStep(
-                            session.SessionId,
-                            step,
-                            "tool",
-                            tool.Name,
-                            decision.Reason,
-                            false,
-                            "User rejected",
-                            DateTimeOffset.UtcNow,
-                            0,
-                            "Approval rejected");
-
-                        trace.Add(rejectedStep);
-                        await _eventStore.AppendStepAsync(rejectedStep, ct);
-                        continue;
-                    }
-
-                    await observer.OnEventAsync(new AgentRunEvent(
-                        AgentRunEventType.ApprovalGranted,
-                        "User approved action",
-                        step,
-                        tool.Name), ct);
-                }
-
-                await observer.OnEventAsync(new AgentRunEvent(
-                    AgentRunEventType.ToolExecutionStarted,
-                    BuildToolRunMessage(tool.Name, decision.Arguments),
-                    step,
-                    tool.Name), ct);
-
-                var stopwatch = Stopwatch.StartNew();
-                ToolResult result;
-
-                try
-                {
-                    using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-                    timeoutCts.CancelAfter(TimeSpan.FromSeconds(_config.Runtime.ToolTimeoutSeconds));
-                    result = await tool.ExecuteAsync(call, context, timeoutCts.Token);
-                }
-                catch (OperationCanceledException) when (!ct.IsCancellationRequested)
-                {
-                    result = new ToolResult(false, "Tool timed out.", null, null);
-                }
-                catch (Exception ex)
-                {
-                    result = new ToolResult(false, $"Tool execution threw exception: {ex.Message}", null, ex.ToString());
-                }
-
-                stopwatch.Stop();
-
+                var result = turnResult.Result!;
                 await observer.OnEventAsync(new AgentRunEvent(
                     AgentRunEventType.ToolExecutionCompleted,
                     BuildToolCompletionMessage(tool.Name, decision.Arguments, result),
@@ -529,29 +468,9 @@ public sealed class ReActAgentLoop : IAgentLoop
                     tool.Name), ct);
 
                 CapturePathHints(pathHints, request.WorkspaceRoot, tool.Name, decision.Arguments, result);
-
-                var primaryOutput = !string.IsNullOrWhiteSpace(result.StdOut)
-                    ? result.StdOut
-                    : result.Message;
-                var output = TruncateOutput(primaryOutput, _config.Runtime.MaxOutputBytes);
-                var stepRecord = new SessionStep(
-                    session.SessionId,
-                    step,
-                    "tool",
-                    tool.Name,
-                    decision.Reason,
-                    result.Success,
-                    output,
-                    DateTimeOffset.UtcNow,
-                    stopwatch.ElapsedMilliseconds,
-                    result.Success ? null : result.StdErr ?? result.Message);
-
-                trace.Add(stepRecord);
-                await _eventStore.AppendStepAsync(stepRecord, ct);
+                trace.Add(turnResult.Step!);
                 toolStepsExecuted++;
                 lastModelIssue = result.Success ? string.Empty : $"tool_failed:{tool.Name}";
-
-                history.Add(new ModelMessage("assistant", modelResult.Content));
                 history.Add(new ModelMessage("user", BuildObservationMessage(tool.Name, result, _config.Runtime.ObservationMaxChars)));
             }
 
@@ -591,11 +510,33 @@ public sealed class ReActAgentLoop : IAgentLoop
                 AgentRunEventType.SessionCompleted,
                 success ? "Task completed" : "Task ended without completion"), ct);
 
+            await context.EventLog.AppendAsync(new AgentEventRecord(
+                session.SessionId,
+                "final_answer",
+                DateTimeOffset.UtcNow,
+                finalMessage,
+                null,
+                success), ct);
+            await context.EventLog.AppendAsync(new AgentEventRecord(
+                session.SessionId,
+                "session_end",
+                DateTimeOffset.UtcNow,
+                success ? "completed" : "incomplete",
+                null,
+                success), ct);
+
             return new AgentRunResult(success, finalMessage, trace.Count, session.SessionId, trace);
         }
         catch (Exception ex)
         {
             await _eventStore.CompleteSessionAsync(session.SessionId, "error", ct);
+            await context.EventLog.AppendAsync(new AgentEventRecord(
+                session.SessionId,
+                "session_end",
+                DateTimeOffset.UtcNow,
+                ex.Message,
+                null,
+                false), ct);
 
             if (_config.Runtime.MemoryEnabled)
             {
@@ -804,14 +745,14 @@ public sealed class ReActAgentLoop : IAgentLoop
 
         return toolName switch
         {
-            "fs_list" => $"Exploring directory {path ?? "."}",
-            "fs_read" => $"Exploring file {path ?? "<missing path>"}",
-            "fs_write" => $"Editing file {path ?? "<missing path>"}",
-            "fs_patch" => $"Editing file {path ?? "<missing path>"}",
+            "fs_list" => $"Listing {path ?? "."}",
+            "fs_read" => $"Reading {path ?? "<missing path>"}",
+            "fs_write" => $"Writing {path ?? "<missing path>"}",
+            "fs_patch" => $"Patching {path ?? "<missing path>"}",
             "fs_delete" => $"Deleting path {path ?? "<missing path>"}",
-            "search_lexical" => $"Exploring search query \"{queryText}\"",
-            "search_semantic" => $"Exploring semantic query \"{queryText}\"",
-            "exec_shell" => $"Running command: {commandText}",
+            "search_lexical" => $"Searching \"{queryText}\"",
+            "search_semantic" => $"Searching semantically for \"{queryText}\"",
+            "exec_shell" => $"Running {commandText}",
             "git_status" => "Running git status --short --branch",
             "git_diff" => "Running git diff",
             "git_log" => "Running git log --oneline",
@@ -839,10 +780,10 @@ public sealed class ReActAgentLoop : IAgentLoop
 
         return toolName switch
         {
-            "fs_list" => $"Explored {(path ?? ".")}",
-            "fs_read" => $"Explored {path ?? "<missing path>"}",
-            "fs_write" => $"Edited {path ?? "<missing path>"}",
-            "fs_patch" => $"Edited {path ?? "<missing path>"}",
+            "fs_list" => $"Listed {(path ?? ".")}",
+            "fs_read" => $"Read {path ?? "<missing path>"}",
+            "fs_write" => $"Wrote {path ?? "<missing path>"}",
+            "fs_patch" => $"Patched {path ?? "<missing path>"}",
             "fs_delete" => $"Deleted {path ?? "<missing path>"}",
             "search_lexical" => $"Searched \"{queryText}\"",
             "search_semantic" => $"Searched semantically \"{queryText}\"",
@@ -2054,6 +1995,8 @@ public sealed class ReActAgentLoop : IAgentLoop
         ref string modelName,
         string workspaceRoot,
         string sessionId,
+        AgentExecutionMode executionMode,
+        ApprovalPolicyMode approvalMode,
         ref ToolContext context)
     {
         if (profileIndex + 1 >= profilePlan.Count)
@@ -2065,7 +2008,7 @@ public sealed class ReActAgentLoop : IAgentLoop
         currentProfileName = profilePlan[profileIndex];
         modelClient = _modelRouter.GetClient(currentProfileName);
         modelName = _modelRouter.ResolveModelName(currentProfileName);
-        context = _contextFactory.Create(workspaceRoot, sessionId, currentProfileName);
+        context = _contextFactory.Create(workspaceRoot, sessionId, currentProfileName, executionMode, approvalMode);
         return true;
     }
 
