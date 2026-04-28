@@ -15,6 +15,7 @@
 - Injected runtime capability context into the model loop so prompts respect no-admin/offline/missing-tool constraints.
 - Tightened workspace memory ranking so noisy failed runs are less likely to pollute future context.
 - Added Windows self-contained publish scripts and a VS Code publish task.
+- Added committed Windows release bundle layout under `release/windows/` for GitHub distribution.
 - Rewrote documentation around Windows-first, no-admin, low-dependency operation.
 
 ## Current Problems

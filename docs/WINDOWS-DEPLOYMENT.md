@@ -21,6 +21,16 @@ Output:
 
 The publish script produces a self-contained single-file executable layout suitable for copy-and-run distribution.
 
+If you want GitHub to contain committed ready-to-run Windows files, use:
+
+```cmd
+scripts\prepare-github-windows-bundles.cmd
+```
+
+That refreshes:
+- `release\windows\win-x64\`
+- `release\windows\win-arm64\`
+
 ## Target Machine Expectations
 
 - no admin rights required

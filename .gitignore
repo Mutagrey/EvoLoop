@@ -4,6 +4,7 @@ obj/
 artifacts/
 publish/
 .tooling/
+release/windows/**/*.zip
 .DS_Store
 *.user
 *.suo

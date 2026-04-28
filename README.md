@@ -46,9 +46,8 @@ Details:
 Packaged Windows usage:
 
 ```powershell
-.\EvoLoop.Agent.exe doctor
-.\EvoLoop.Agent.exe
-.\EvoLoop.Agent.exe run "inspect repository and summarize current issues"
+.\agent.cmd doctor
+.\agent.cmd run "inspect repository and summarize current issues"
 ```
 
 Source usage on a build/developer machine:
@@ -89,6 +88,22 @@ Or from Unix/macOS build hosts:
 ```
 
 Published output goes to `artifacts/publish/win-x64/`.
+
+Tracked GitHub-ready Windows bundles:
+
+```bash
+./scripts/prepare-github-windows-bundles.sh
+```
+
+or on Windows:
+
+```cmd
+scripts\prepare-github-windows-bundles.cmd
+```
+
+This refreshes the committed bundles in:
+- `release/windows/win-x64/`
+- `release/windows/win-arm64/`
 
 ## Commands
 
