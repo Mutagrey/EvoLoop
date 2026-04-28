@@ -85,6 +85,7 @@ public sealed record ToolContext(
     string ProfileName,
     AgentConfig Config,
     ISearchService SearchService,
+    RuntimeCapabilities Capabilities,
     Func<string, string, CancellationToken, Task<IReadOnlyList<SearchHit>>>? RerankFn = null);
 
 public sealed record ModelCapabilities(bool SupportsStreaming, bool SupportsEmbeddings);
@@ -221,6 +222,22 @@ public sealed class NullWorkspaceMemoryStore : IWorkspaceMemoryStore
         => Task.FromResult(WorkspaceMemoryContext.Empty);
 
     public Task SaveRunAsync(WorkspaceMemoryRecord record, CancellationToken ct)
+        => Task.CompletedTask;
+}
+
+public sealed class NullEventStore : IEventStore
+{
+    public static readonly NullEventStore Instance = new();
+
+    private NullEventStore() { }
+
+    public Task<SessionInfo> StartSessionAsync(string workspaceRoot, string profile, string task, CancellationToken ct)
+        => Task.FromResult(new SessionInfo(Guid.NewGuid().ToString("n"), DateTimeOffset.UtcNow));
+
+    public Task AppendStepAsync(SessionStep step, CancellationToken ct)
+        => Task.CompletedTask;
+
+    public Task CompleteSessionAsync(string sessionId, string finalStatus, CancellationToken ct)
         => Task.CompletedTask;
 }
 

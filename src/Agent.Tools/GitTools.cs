@@ -13,6 +13,11 @@ public sealed class GitStatusTool : ITool
 
     public async Task<ToolResult> ExecuteAsync(ToolCall call, ToolContext context, CancellationToken ct)
     {
+        if (!context.Capabilities.GitAvailable)
+        {
+            return new ToolResult(false, "git is unavailable in the current environment.");
+        }
+
         var result = await ProcessRunner.RunAsync(
             "git",
             new[] { "status", "--short", "--branch" },
@@ -39,6 +44,11 @@ public sealed class GitDiffTool : ITool
 
     public async Task<ToolResult> ExecuteAsync(ToolCall call, ToolContext context, CancellationToken ct)
     {
+        if (!context.Capabilities.GitAvailable)
+        {
+            return new ToolResult(false, "git is unavailable in the current environment.");
+        }
+
         var staged = ToolArgumentReader.GetBool(call.Arguments, "staged", false);
         var path = ToolArgumentReader.GetString(call.Arguments, "path");
 
@@ -79,6 +89,11 @@ public sealed class GitLogTool : ITool
 
     public async Task<ToolResult> ExecuteAsync(ToolCall call, ToolContext context, CancellationToken ct)
     {
+        if (!context.Capabilities.GitAvailable)
+        {
+            return new ToolResult(false, "git is unavailable in the current environment.");
+        }
+
         var maxCount = Math.Clamp(ToolArgumentReader.GetInt32(call.Arguments, "max_count", 20), 1, 200);
 
         var result = await ProcessRunner.RunAsync(
@@ -106,6 +121,11 @@ public sealed class GitShowTool : ITool
 
     public async Task<ToolResult> ExecuteAsync(ToolCall call, ToolContext context, CancellationToken ct)
     {
+        if (!context.Capabilities.GitAvailable)
+        {
+            return new ToolResult(false, "git is unavailable in the current environment.");
+        }
+
         var gitRef = ToolArgumentReader.GetString(call.Arguments, "ref") ?? "HEAD";
 
         var result = await ProcessRunner.RunAsync(
@@ -133,6 +153,11 @@ public sealed class GitAddTool : ITool
 
     public async Task<ToolResult> ExecuteAsync(ToolCall call, ToolContext context, CancellationToken ct)
     {
+        if (!context.Capabilities.GitAvailable)
+        {
+            return new ToolResult(false, "git is unavailable in the current environment.");
+        }
+
         var pathspec = ToolArgumentReader.GetString(call.Arguments, "pathspec") ?? ".";
 
         var result = await ProcessRunner.RunAsync(
@@ -160,6 +185,11 @@ public sealed class GitCommitTool : ITool
 
     public async Task<ToolResult> ExecuteAsync(ToolCall call, ToolContext context, CancellationToken ct)
     {
+        if (!context.Capabilities.GitAvailable)
+        {
+            return new ToolResult(false, "git is unavailable in the current environment.");
+        }
+
         var message = ToolArgumentReader.GetString(call.Arguments, "message");
         if (string.IsNullOrWhiteSpace(message))
         {

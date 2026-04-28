@@ -7,6 +7,7 @@ public static class ToolArgumentReader
 {
     private static readonly string[] NestedContainerKeys =
     {
+        "args",
         "arguments",
         "params",
         "payload",
@@ -253,7 +254,14 @@ public static class ToolArgumentReader
             return false;
         }
 
-        if (!TryExtractScalarFromText(input.GetString(), property, out var candidate))
+        var rawInput = input.GetString();
+        if (TryParseObjectFromString(rawInput, out var nestedObject) &&
+            TryGetValue(nestedObject, property, out value))
+        {
+            return true;
+        }
+
+        if (!TryExtractScalarFromText(rawInput, property, out var candidate))
         {
             return false;
         }

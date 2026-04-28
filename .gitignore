@@ -1,6 +1,9 @@
 bin/
 obj/
 .evoloop/
+artifacts/
+publish/
+.tooling/
 .DS_Store
 *.user
 *.suo

@@ -18,6 +18,8 @@ var tests = new List<(string Name, Func<Task> Run)>
     ("Policy requires approval for writes", TestPolicyRequiresApprovalForWrite),
     ("Offline strict denies non-approved network shell", TestOfflineStrictDeniesNetworkShell),
     ("Offline strict allows approved gateway host with approval", TestOfflineStrictAllowsApprovedHostWithApproval),
+    ("Capability probe selects local-only degraded mode without model", TestCapabilityProbeSelectsLocalOnlyModeWithoutModel),
+    ("Capability probe selects offline strict mode when model is ready", TestCapabilityProbeSelectsOfflineStrictModeWhenModelReady),
     ("ReAct loop retries on non-json model output", TestLoopRetriesOnNonJsonOutput),
     ("ToolArgumentReader maps path aliases and nested input", TestToolArgumentReaderAliasAndNested),
     ("ReAct loop auto-repairs missing path from task context", TestLoopAutoRepairsMissingPathFromTask),
@@ -34,9 +36,11 @@ var tests = new List<(string Name, Func<Task> Run)>
     ("ReAct loop accepts plain final text for non-tool task", TestLoopAcceptsPlainFinalTextForNonToolTask),
     ("ReAct loop executes tool then final", TestLoopToolThenFinal),
     ("Fallback lexical search returns results", TestFallbackLexicalSearch),
+    ("ReAct loop injects runtime capability context", TestLoopInjectsRuntimeCapabilityContext),
     ("ReAct loop injects workspace memory into model context", TestLoopInjectsWorkspaceMemory),
     ("Workspace memory store persists and loads context", TestWorkspaceMemoryStorePersistsAndLoadsContext),
-    ("Workspace memory survives project directory move", TestWorkspaceMemorySurvivesDirectoryMove)
+    ("Workspace memory survives project directory move", TestWorkspaceMemorySurvivesDirectoryMove),
+    ("Workspace memory filters noisy failed runs", TestWorkspaceMemoryFiltersNoisyFailedRuns)
 };
 
 var failed = 0;
@@ -86,7 +90,8 @@ static Task TestPolicyDeniesOutsideWorkspace()
         SessionId: "s1",
         ProfileName: "reasoning",
         Config: config,
-        SearchService: new NullSearchService());
+        SearchService: new NullSearchService(),
+        Capabilities: RuntimeCapabilities.Default);
 
     var decision = policy.Evaluate(call, context);
     Assert(decision.Kind == PolicyDecisionKind.Deny, "Expected deny decision for outside workspace path.");
@@ -113,7 +118,8 @@ static Task TestPolicyDeniesSiblingPrefixBypass()
             SessionId: "s1",
             ProfileName: "reasoning",
             Config: config,
-            SearchService: new NullSearchService());
+            SearchService: new NullSearchService(),
+            Capabilities: RuntimeCapabilities.Default);
 
         var decision = policy.Evaluate(call, context);
         Assert(decision.Kind == PolicyDecisionKind.Deny, "Expected deny decision for sibling-prefix outside workspace path.");
@@ -147,7 +153,8 @@ static Task TestPolicyDeniesExecShellCwdOutsideWorkspace()
             SessionId: "s1",
             ProfileName: "reasoning",
             Config: config,
-            SearchService: new NullSearchService());
+            SearchService: new NullSearchService(),
+            Capabilities: RuntimeCapabilities.Default);
 
         var decision = policy.Evaluate(call, context);
         Assert(decision.Kind == PolicyDecisionKind.Deny, "Expected deny decision for exec_shell cwd outside workspace.");
@@ -174,7 +181,8 @@ static Task TestPolicyDeniesOutsideWorkspacePathAlias()
         SessionId: "s1",
         ProfileName: "reasoning",
         Config: config,
-        SearchService: new NullSearchService());
+        SearchService: new NullSearchService(),
+        Capabilities: RuntimeCapabilities.Default);
 
     var decision = policy.Evaluate(call, context);
     Assert(decision.Kind == PolicyDecisionKind.Deny, "Expected deny decision for outside workspace path via alias.");
@@ -187,7 +195,7 @@ static Task TestPolicyDeniesDestructiveShellPatterns()
     var policy = new DefaultPolicyEngine(config);
     using var doc = JsonDocument.Parse("{\"command\":\"rm -rf .\"}");
     var call = new ToolCall("exec_shell", doc.RootElement.Clone(), "dangerous");
-    var context = new ToolContext("/tmp/workspace", "s1", "reasoning", config, new NullSearchService());
+    var context = new ToolContext("/tmp/workspace", "s1", "reasoning", config, new NullSearchService(), RuntimeCapabilities.Default);
 
     var decision = policy.Evaluate(call, context);
     Assert(decision.Kind == PolicyDecisionKind.Deny, "Expected deny for destructive shell pattern.");
@@ -200,7 +208,7 @@ static Task TestPolicyReadsNestedShellCommandAlias()
     var policy = new DefaultPolicyEngine(config);
     using var doc = JsonDocument.Parse("{\"args\":{\"cmd\":\"git status\"}}");
     var call = new ToolCall("exec_shell", doc.RootElement.Clone(), "nested alias");
-    var context = new ToolContext("/tmp/workspace", "s1", "reasoning", config, new NullSearchService());
+    var context = new ToolContext("/tmp/workspace", "s1", "reasoning", config, new NullSearchService(), RuntimeCapabilities.Default);
 
     var decision = policy.Evaluate(call, context);
     Assert(decision.Kind == PolicyDecisionKind.Allow, "Expected policy to read nested alias command and allow benign command.");
@@ -219,7 +227,8 @@ static Task TestPolicyRequiresApprovalForWrite()
         SessionId: "s1",
         ProfileName: "reasoning",
         Config: config,
-        SearchService: new NullSearchService());
+        SearchService: new NullSearchService(),
+        Capabilities: RuntimeCapabilities.Default);
 
     var decision = policy.Evaluate(call, context);
     Assert(decision.Kind == PolicyDecisionKind.RequireApproval, "Expected approval requirement for fs_write.");
@@ -241,7 +250,7 @@ static Task TestOfflineStrictDeniesNetworkShell()
     var policy = new DefaultPolicyEngine(config);
     using var doc = JsonDocument.Parse("{\"command\":\"git push origin main\"}");
     var call = new ToolCall("exec_shell", doc.RootElement.Clone(), "push");
-    var context = new ToolContext("/tmp/workspace", "s1", "reasoning", config, new NullSearchService());
+    var context = new ToolContext("/tmp/workspace", "s1", "reasoning", config, new NullSearchService(), RuntimeCapabilities.Default);
 
     var decision = policy.Evaluate(call, context);
     Assert(decision.Kind == PolicyDecisionKind.Deny, "Expected deny for network shell command in offline strict mode.");
@@ -263,10 +272,33 @@ static Task TestOfflineStrictAllowsApprovedHostWithApproval()
     var policy = new DefaultPolicyEngine(config);
     using var doc = JsonDocument.Parse("{\"command\":\"curl https://gateway.company.local/health\"}");
     var call = new ToolCall("exec_shell", doc.RootElement.Clone(), "healthcheck");
-    var context = new ToolContext("/tmp/workspace", "s1", "reasoning", config, new NullSearchService());
+    var context = new ToolContext("/tmp/workspace", "s1", "reasoning", config, new NullSearchService(), RuntimeCapabilities.Default);
 
     var decision = policy.Evaluate(call, context);
     Assert(decision.Kind == PolicyDecisionKind.RequireApproval, "Expected approval requirement for approved gateway host command.");
+    return Task.CompletedTask;
+}
+
+static Task TestCapabilityProbeSelectsLocalOnlyModeWithoutModel()
+{
+    var config = new AgentConfig();
+    var mode = RuntimeCapabilityProbe.DetermineOperatingMode(config, modelReady: false);
+    Assert(mode == RuntimeOperatingMode.LocalOnlyDegraded, "Expected local-only degraded mode when model is unavailable.");
+    return Task.CompletedTask;
+}
+
+static Task TestCapabilityProbeSelectsOfflineStrictModeWhenModelReady()
+{
+    var config = new AgentConfig
+    {
+        Safety = new SafetyConfig
+        {
+            OfflineStrictMode = true
+        }
+    };
+
+    var mode = RuntimeCapabilityProbe.DetermineOperatingMode(config, modelReady: true);
+    Assert(mode == RuntimeOperatingMode.OfflineStrict, "Expected offline-strict mode when model is ready.");
     return Task.CompletedTask;
 }
 
@@ -624,6 +656,8 @@ static async Task TestLoopStopsAfterRepeatedInvalidOutput()
             MaxSteps = 10,
             MaxInvalidModelResponses = 3,
             MaxConsecutiveFinalWithoutTools = 3,
+            InvalidResponsesBeforeProfileSwitch = 10,
+            FinalWithoutToolsBeforeProfileSwitch = 10,
             ToolTimeoutSeconds = 120,
             MaxOutputBytes = 64 * 1024,
             ModelMinOutputTokens = 256,
@@ -810,6 +844,52 @@ static async Task TestLoopInjectsWorkspaceMemory()
     Assert(memoryStore.Saved.Count == 1, "Expected memory store to receive saved run.");
 }
 
+static async Task TestLoopInjectsRuntimeCapabilityContext()
+{
+    var config = new AgentConfig
+    {
+        Runtime = new RuntimeConfig
+        {
+            MemoryEnabled = false
+        }
+    };
+
+    var responses = new Queue<ModelTurnResult>();
+    responses.Enqueue(new ModelTurnResult("{\"type\":\"final\",\"message\":\"done\"}", "fake"));
+
+    var client = new FakeModelClient(responses);
+    var router = new FakeModelRouter(client, "fake");
+    var capabilities = new RuntimeCapabilities(
+        RuntimeOperatingMode.LocalOnlyDegraded,
+        "Windows 11",
+        "cmd.exe",
+        true,
+        true,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        "workspace storage available",
+        "gateway not reachable");
+
+    var loop = new ReActAgentLoop(
+        router,
+        Array.Empty<ITool>(),
+        new DefaultPolicyEngine(config),
+        new AutoApproveService(true),
+        new InMemoryEventStore(),
+        new DefaultToolContextFactory(config, new NullSearchService(), capabilities),
+        config);
+
+    var result = await loop.RunAsync(new AgentRunRequest("answer question", Path.GetTempPath(), "reasoning", 4), CancellationToken.None);
+    Assert(result.Success, "Expected successful run.");
+    Assert(client.SeenRequests.Count > 0, "Expected at least one model request.");
+    Assert(client.SeenRequests[0].Messages.Any(m => m.Content.Contains("RUNTIME ENVIRONMENT", StringComparison.OrdinalIgnoreCase)),
+        "Expected runtime capability context to be injected into first model request.");
+}
+
 static async Task TestFallbackLexicalSearch()
 {
     var temp = Path.Combine(Path.GetTempPath(), "agent-tests-" + Guid.NewGuid().ToString("n"));
@@ -931,6 +1011,64 @@ static async Task TestWorkspaceMemorySurvivesDirectoryMove()
         if (Directory.Exists(baseDir))
         {
             Directory.Delete(baseDir, true);
+        }
+    }
+}
+
+static async Task TestWorkspaceMemoryFiltersNoisyFailedRuns()
+{
+    var temp = Path.Combine(Path.GetTempPath(), "agent-tests-memory-filter-" + Guid.NewGuid().ToString("n"));
+    Directory.CreateDirectory(temp);
+
+    try
+    {
+        var config = new AgentConfig();
+        var memory = new WorkspaceMemoryStore(temp, config);
+
+        await memory.SaveRunAsync(new WorkspaceMemoryRecord(
+            WorkspaceRoot: temp,
+            SessionId: "failed-noise",
+            Task: "download package and install dependency",
+            Success: false,
+            FinalMessage: "Fatal error: gateway unavailable",
+            Steps: Array.Empty<SessionStep>(),
+            CompletedAtUtc: DateTimeOffset.UtcNow), CancellationToken.None);
+
+        var successSteps = new List<SessionStep>
+        {
+            new(
+                SessionId: "success-1",
+                StepNumber: 1,
+                Action: "tool",
+                ToolName: "fs_write",
+                Reasoning: "write config",
+                Success: true,
+                Output: "Wrote file: config/appsettings.json",
+                TimestampUtc: DateTimeOffset.UtcNow,
+                DurationMs: 12,
+                Error: null)
+        };
+
+        await memory.SaveRunAsync(new WorkspaceMemoryRecord(
+            WorkspaceRoot: temp,
+            SessionId: "success-1",
+            Task: "update config file",
+            Success: true,
+            FinalMessage: "updated config",
+            Steps: successSteps,
+            CompletedAtUtc: DateTimeOffset.UtcNow), CancellationToken.None);
+
+        var loaded = await memory.LoadContextAsync(temp, "edit config values", CancellationToken.None);
+        Assert(!loaded.Content.Contains("gateway unavailable", StringComparison.OrdinalIgnoreCase),
+            "Expected noisy failed run to be filtered from injected memory.");
+        Assert(loaded.Content.Contains("update config file", StringComparison.OrdinalIgnoreCase),
+            "Expected useful successful run to remain in memory context.");
+    }
+    finally
+    {
+        if (Directory.Exists(temp))
+        {
+            Directory.Delete(temp, true);
         }
     }
 }

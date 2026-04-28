@@ -61,6 +61,11 @@ public sealed class WorkspaceMemoryStore : IWorkspaceMemoryStore
         var used = 0;
         foreach (var entry in ranked)
         {
+            if (!ShouldIncludeInContext(entry, task))
+            {
+                continue;
+            }
+
             var line = BuildContextLine(entry);
             if (sb.Length + line.Length + Environment.NewLine.Length > maxChars)
             {
@@ -275,16 +280,28 @@ public sealed class WorkspaceMemoryStore : IWorkspaceMemoryStore
         for (var i = 0; i < orderedByRecency.Count; i++)
         {
             var entry = orderedByRecency[i];
-            var overlap = ScoreTaskOverlap(task, $"{entry.Task} {entry.Summary}");
+            var overlap = ScoreTaskOverlap(task, $"{entry.Task} {entry.Summary} {string.Join(' ', entry.Highlights)}");
             var recencyBoost = 1.0 / (1 + i);
-            var outcomeBoost = entry.Success ? 0.05 : 0.0;
-            entry = entry with { RankScore = overlap + recencyBoost + outcomeBoost };
+            var outcomeAdjustment = entry.Success ? 0.20 : -0.35;
+            var actionBoost = entry.Highlights.Length > 0 ? 0.15 : -0.10;
+            entry = entry with { RankScore = (overlap * 2.2) + (recencyBoost * 0.35) + outcomeAdjustment + actionBoost };
             orderedByRecency[i] = entry;
         }
 
         return orderedByRecency
             .OrderByDescending(e => e.RankScore)
             .ThenByDescending(e => e.CompletedAtUtc);
+    }
+
+    private static bool ShouldIncludeInContext(MemoryRunEntry entry, string task)
+    {
+        var overlap = ScoreTaskOverlap(task, $"{entry.Task} {entry.Summary} {string.Join(' ', entry.Highlights)}");
+        if (entry.Success)
+        {
+            return overlap >= 0.18 || entry.RankScore >= 0.95;
+        }
+
+        return overlap >= 0.45 && entry.Highlights.Length > 0;
     }
 
     private static double ScoreTaskOverlap(string task, string corpus)
@@ -344,20 +361,39 @@ public sealed class WorkspaceMemoryStore : IWorkspaceMemoryStore
             .ToArray();
 
         var sb = new StringBuilder();
-        sb.Append($"final=\"{ToOneLine(record.FinalMessage, 180)}\"");
-        if (toolCounts.Length > 0)
-        {
-            sb.Append("; tools=").Append(string.Join(", ", toolCounts));
-        }
-
         if (highlights.Length > 0)
         {
-            sb.Append("; highlights=").Append(string.Join(" | ", highlights));
+            sb.Append("highlights=").Append(string.Join(" | ", highlights));
+        }
+
+        if (toolCounts.Length > 0)
+        {
+            if (sb.Length > 0)
+            {
+                sb.Append("; ");
+            }
+
+            sb.Append("tools=").Append(string.Join(", ", toolCounts));
         }
 
         if (failures.Length > 0)
         {
-            sb.Append("; failures=").Append(string.Join(" | ", failures));
+            if (sb.Length > 0)
+            {
+                sb.Append("; ");
+            }
+
+            sb.Append("failures=").Append(string.Join(" | ", failures));
+        }
+
+        if (!string.IsNullOrWhiteSpace(record.FinalMessage))
+        {
+            if (sb.Length > 0)
+            {
+                sb.Append("; ");
+            }
+
+            sb.Append("final=\"").Append(ToOneLine(record.FinalMessage, 180)).Append('"');
         }
 
         var summary = sb.ToString();
@@ -392,11 +428,9 @@ public sealed class WorkspaceMemoryStore : IWorkspaceMemoryStore
                 continue;
             }
 
-            if (step.ToolName.Equals("exec_shell", StringComparison.OrdinalIgnoreCase) ||
-                step.ToolName.StartsWith("git_", StringComparison.OrdinalIgnoreCase))
+            if (step.ToolName.StartsWith("git_", StringComparison.OrdinalIgnoreCase))
             {
                 yield return ToOneLine(step.Output, 100);
-                continue;
             }
         }
     }

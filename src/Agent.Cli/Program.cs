@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Runtime.InteropServices;
 using Agent.Core;
 using Agent.Providers;
 using Agent.Storage;
@@ -19,9 +20,10 @@ public static class Program
             var requestedWorkspace = Path.GetFullPath(command.Workspace ?? Directory.GetCurrentDirectory());
             var workspace = await ResolveWorkspaceRootAsync(requestedWorkspace, CancellationToken.None);
             var config = BuildEffectiveConfig(AgentConfigLoader.LoadOrCreate(command.ConfigPath), command);
-
             var useColor = command.NoColor ? false : config.Ui.UseColor;
             var renderer = new AnsiRenderer(useColor);
+            var capabilities = await RuntimeCapabilityProbe.ProbeAsync(config, workspace, CancellationToken.None);
+
             if (!workspace.Equals(requestedWorkspace, StringComparison.OrdinalIgnoreCase))
             {
                 renderer.WriteInfo($"Workspace resolved to git root: {workspace}");
@@ -38,32 +40,61 @@ public static class Program
                     $"API auth is not configured. Set env var '{config.Api.ApiKeyEnvVar}', or set api.apiKey, or configure auth headers in config.");
             }
 
-            using var modelRouter = new ModelClientRouter(config);
+            WriteCapabilityWarnings(renderer, capabilities);
+
+            if (command.Mode == CliMode.Doctor)
+            {
+                renderer.WriteHeader("EvoLoop Doctor");
+                renderer.WritePanel("Capabilities", capabilities.ToDisplayText());
+                return 0;
+            }
+
+            ModelClientRouter? liveRouter = null;
+            IModelClientRouter modelRouter;
+            if (capabilities.CanRunAgentTasks)
+            {
+                liveRouter = new ModelClientRouter(config);
+                modelRouter = liveRouter;
+            }
+            else
+            {
+                modelRouter = new DisabledModelClientRouter(
+                    $"Model execution is unavailable because the agent is running in '{capabilities.ModeLabel}' mode. Run 'agent doctor' to inspect gateway and environment status.");
+            }
+
             var searchService = new HybridSearchService(modelRouter, config, workspace);
-            var contextFactory = new DefaultToolContextFactory(config, searchService);
+            var contextFactory = new DefaultToolContextFactory(config, searchService, capabilities);
             var tools = ToolCatalog.CreateDefaultTools();
             var policy = new DefaultPolicyEngine(config);
             var approval = new ConsoleApprovalService(renderer);
-            var eventStore = new HybridEventStore(workspace);
-            IWorkspaceMemoryStore memoryStore = config.Runtime.MemoryEnabled
+            IEventStore eventStore = capabilities.WorkspaceWritable
+                ? new HybridEventStore(workspace)
+                : NullEventStore.Instance;
+            IWorkspaceMemoryStore memoryStore = config.Runtime.MemoryEnabled && capabilities.WorkspaceWritable
                 ? new WorkspaceMemoryStore(workspace, config)
                 : NullWorkspaceMemoryStore.Instance;
             var loop = new ReActAgentLoop(modelRouter, tools, policy, approval, eventStore, contextFactory, config, memoryStore);
-
-            if (command.Mode == CliMode.Run)
+            try
             {
-                if (string.IsNullOrWhiteSpace(command.Task))
+                if (command.Mode == CliMode.Run)
                 {
-                    renderer.WriteError("Missing task. Usage: agent run \"your task\" [--profile reasoning|fast|fallback]");
-                    return 2;
+                    if (string.IsNullOrWhiteSpace(command.Task))
+                    {
+                        renderer.WriteError("Missing task. Usage: agent run \"your task\" [--profile reasoning|fast|fallback]");
+                        return 2;
+                    }
+
+                    var result = await RunTaskAsync(loop, renderer, command.Task, workspace, command.Profile, capabilities);
+                    return result.Success ? 0 : 1;
                 }
 
-                var result = await RunTaskAsync(loop, renderer, command.Task, workspace, command.Profile);
-                return result.Success ? 0 : 1;
+                await RunReplAsync(loop, tools, renderer, config, workspace, command.Profile, memoryStore, capabilities);
+                return 0;
             }
-
-            await RunReplAsync(loop, tools, renderer, config, workspace, command.Profile, memoryStore);
-            return 0;
+            finally
+            {
+                liveRouter?.Dispose();
+            }
         }
         catch (Exception ex)
         {
@@ -169,12 +200,13 @@ public static class Program
         AgentConfig config,
         string workspace,
         string profile,
-        IWorkspaceMemoryStore memoryStore)
+        IWorkspaceMemoryStore memoryStore,
+        RuntimeCapabilities capabilities)
     {
         renderer.WriteHeader("EvoLoop Agent CLI");
         renderer.WritePanel(
             "Session",
-            $"Workspace: {workspace}\nProfile: {profile}\nCommands: /task, /status, /tools, /history, /memory, /cmdlog, /config, /exit\nRecall: !N");
+            $"Workspace: {workspace}\nProfile: {profile}\nMode: {capabilities.ModeLabel}\nCommands: /task, /status, /tools, /history, /memory, /cmdlog, /config, /doctor, /exit\nRecall: !N");
 
         AgentRunResult? lastRun = null;
         var commandHistory = await ReplCommandHistory.OpenAsync(workspace, 300, CancellationToken.None);
@@ -221,7 +253,7 @@ public static class Program
                 }
 
                 await commandHistory.AddAsync(task, CancellationToken.None);
-                lastRun = await RunTaskAsync(loop, renderer, task, workspace, profile);
+                lastRun = await RunTaskAsync(loop, renderer, task, workspace, profile, capabilities);
                 continue;
             }
 
@@ -285,6 +317,12 @@ public static class Program
                 continue;
             }
 
+            if (input.Equals("/doctor", StringComparison.OrdinalIgnoreCase))
+            {
+                renderer.WritePanel("Capabilities", capabilities.ToDisplayText());
+                continue;
+            }
+
             if (input.Equals("/memory", StringComparison.OrdinalIgnoreCase))
             {
                 if (!config.Runtime.MemoryEnabled)
@@ -319,7 +357,7 @@ public static class Program
             }
 
             await commandHistory.AddAsync(input, CancellationToken.None);
-            lastRun = await RunTaskAsync(loop, renderer, input, workspace, profile);
+            lastRun = await RunTaskAsync(loop, renderer, input, workspace, profile, capabilities);
         }
 
         renderer.WriteInfo("Goodbye.");
@@ -330,8 +368,22 @@ public static class Program
         AnsiRenderer renderer,
         string task,
         string workspace,
-        string profile)
+        string profile,
+        RuntimeCapabilities capabilities)
     {
+        if (!capabilities.CanRunAgentTasks)
+        {
+            renderer.WriteError(
+                $"Agent task execution is unavailable in '{capabilities.ModeLabel}' mode. Run 'agent doctor' to inspect gateway connectivity and environment restrictions.");
+
+            return new AgentRunResult(
+                false,
+                $"Task was not started because model execution is unavailable. {capabilities.ModelStatus}.",
+                0,
+                "not-started",
+                Array.Empty<SessionStep>());
+        }
+
         using var observer = new SpinnerObserver(renderer);
 
         renderer.WritePanel("Task", task);
@@ -351,6 +403,29 @@ public static class Program
             $"Session: {result.SessionId}\nSteps: {result.Steps}\n\n{result.FinalMessage}");
 
         return result;
+    }
+
+    private static void WriteCapabilityWarnings(AnsiRenderer renderer, RuntimeCapabilities capabilities)
+    {
+        if (!capabilities.WorkspaceWritable)
+        {
+            renderer.WriteWarn("Workspace storage is unavailable. Session persistence and memory are disabled for this run.");
+        }
+
+        if (!capabilities.GitAvailable)
+        {
+            renderer.WriteWarn("git is not available. Git tools will report a clear unavailable status.");
+        }
+
+        if (!capabilities.RipgrepAvailable)
+        {
+            renderer.WriteWarn("rg is not available. Search will use the built-in scanner fallback.");
+        }
+
+        if (!capabilities.CanRunAgentTasks)
+        {
+            renderer.WriteWarn($"Agent is running in '{capabilities.ModeLabel}' mode: {capabilities.ModelStatus}.");
+        }
     }
     
     private static bool HasApiAuthConfigured(AgentConfig config)
@@ -384,7 +459,8 @@ public static class Program
 internal enum CliMode
 {
     Interactive,
-    Run
+    Run,
+    Doctor
 }
 
 internal sealed class CliArguments
@@ -417,6 +493,11 @@ internal sealed class CliArguments
                 task = args[i];
                 i++;
             }
+        }
+        else if (args.Length > 0 && args[0].Equals("doctor", StringComparison.OrdinalIgnoreCase))
+        {
+            mode = CliMode.Doctor;
+            i = 1;
         }
 
         for (; i < args.Length; i++)
@@ -463,11 +544,11 @@ internal sealed class CliArguments
 
 internal sealed class ReplCommandHistory
 {
-    private readonly string _path;
+    private readonly string? _path;
     private readonly int _maxEntries;
     private readonly List<string> _entries;
 
-    private ReplCommandHistory(string path, int maxEntries, List<string> entries)
+    private ReplCommandHistory(string? path, int maxEntries, List<string> entries)
     {
         _path = path;
         _maxEntries = Math.Max(50, maxEntries);
@@ -477,24 +558,31 @@ internal sealed class ReplCommandHistory
     public static async Task<ReplCommandHistory> OpenAsync(string workspaceRoot, int maxEntries, CancellationToken ct)
     {
         var path = Path.Combine(workspaceRoot, ".evoloop", "storage", "repl-commands.txt");
-        var directory = Path.GetDirectoryName(path);
-        if (!string.IsNullOrWhiteSpace(directory))
-        {
-            Directory.CreateDirectory(directory);
-        }
-
         var entries = new List<string>();
-        if (File.Exists(path))
+        try
         {
-            var lines = await File.ReadAllLinesAsync(path, ct);
-            foreach (var line in lines)
+            var directory = Path.GetDirectoryName(path);
+            if (!string.IsNullOrWhiteSpace(directory))
             {
-                var normalized = line.Trim();
-                if (!string.IsNullOrWhiteSpace(normalized))
+                Directory.CreateDirectory(directory);
+            }
+
+            if (File.Exists(path))
+            {
+                var lines = await File.ReadAllLinesAsync(path, ct);
+                foreach (var line in lines)
                 {
-                    entries.Add(normalized);
+                    var normalized = line.Trim();
+                    if (!string.IsNullOrWhiteSpace(normalized))
+                    {
+                        entries.Add(normalized);
+                    }
                 }
             }
+        }
+        catch
+        {
+            return new ReplCommandHistory(null, maxEntries, entries);
         }
 
         if (entries.Count > maxEntries)
@@ -547,7 +635,10 @@ internal sealed class ReplCommandHistory
             _entries.RemoveRange(0, _entries.Count - _maxEntries);
         }
 
-        await File.WriteAllLinesAsync(_path, _entries, Encoding.UTF8, ct);
+        if (!string.IsNullOrWhiteSpace(_path))
+        {
+            await File.WriteAllLinesAsync(_path, _entries, Encoding.UTF8, ct);
+        }
     }
 
     public string FormatRecent(int take)
@@ -794,6 +885,11 @@ internal sealed class SpinnerObserver : IAgentRunObserver, IDisposable
 
     private void StartSpinner(int? step, string? hint)
     {
+        if (!_renderer.SupportsTransientOutput)
+        {
+            return;
+        }
+
         lock (_sync)
         {
             StopSpinner();
@@ -898,6 +994,11 @@ internal sealed class SpinnerObserver : IAgentRunObserver, IDisposable
 
     private void StopSpinner()
     {
+        if (!_renderer.SupportsTransientOutput)
+        {
+            return;
+        }
+
         lock (_sync)
         {
             if (_spinnerCts is null)
@@ -1034,14 +1135,26 @@ internal sealed class AnsiRenderer
     private const int MaxFrameWidth = 120;
     private const int StatusTagWidth = 12;
     private readonly bool _useColor;
+    private readonly bool _usePlainLayout;
+
+    public bool SupportsTransientOutput { get; }
 
     public AnsiRenderer(bool useColor)
     {
-        _useColor = useColor;
+        _useColor = useColor && SupportsAnsiColor();
+        _usePlainLayout = OperatingSystem.IsWindows() && !_useColor;
+        SupportsTransientOutput = !_usePlainLayout && !Console.IsOutputRedirected;
     }
 
     public void WriteHeader(string title)
     {
+        if (_usePlainLayout)
+        {
+            WriteRaw("== " + title.ToUpperInvariant() + " ==");
+            WriteRaw("Autonomous Coding Agent CLI");
+            return;
+        }
+
         var width = GetFrameWidth();
         var top = "+" + new string('=', width - 2) + "+";
         WriteRaw(Colorize(top, ConsoleColor.Cyan));
@@ -1052,6 +1165,17 @@ internal sealed class AnsiRenderer
 
     public void WritePanel(string title, string body)
     {
+        if (_usePlainLayout)
+        {
+            WriteRaw(string.Empty);
+            WriteRaw("[" + TruncateInline(title, 80) + "]");
+            foreach (var line in WrapText(body, Math.Max(40, GetFrameWidth() - 2)))
+            {
+                WriteRaw(line);
+            }
+            return;
+        }
+
         var width = GetFrameWidth();
         var innerWidth = width - 4;
         var safeTitle = TruncateInline(title, Math.Max(1, innerWidth - 2));
@@ -1072,9 +1196,13 @@ internal sealed class AnsiRenderer
         var timestamp = DateTime.Now.ToString("HH:mm:ss");
         var normalizedTag = NormalizeTag(tag);
         var prefixPlain = $"[{timestamp}] [{normalizedTag}] ";
-        var prefixColored = $"{Colorize($"[{timestamp}]", ConsoleColor.DarkGray)} {Colorize($"[{normalizedTag}]", color)} ";
+        var prefixColored = _useColor
+            ? $"{Colorize($"[{timestamp}]", ConsoleColor.DarkGray)} {Colorize($"[{normalizedTag}]", color)} "
+            : prefixPlain;
         var treePrefix = BuildTreePrefix(depth, isLast);
-        var treePrefixColored = treePrefix.Length == 0 ? string.Empty : Colorize(treePrefix, ConsoleColor.DarkGray);
+        var treePrefixColored = _useColor && treePrefix.Length > 0
+            ? Colorize(treePrefix, ConsoleColor.DarkGray)
+            : treePrefix;
         var indent = new string(' ', prefixPlain.Length + treePrefix.Length);
         var maxMessageWidth = Math.Max(24, GetFrameWidth() - prefixPlain.Length - treePrefix.Length - 1);
         var lines = WrapText(message, maxMessageWidth).ToList();
@@ -1128,6 +1256,57 @@ internal sealed class AnsiRenderer
         };
 
         return $"\u001b[{code}m{text}\u001b[0m";
+    }
+
+    private static bool SupportsAnsiColor()
+    {
+        if (Console.IsOutputRedirected)
+        {
+            return false;
+        }
+
+        if (!OperatingSystem.IsWindows())
+        {
+            return true;
+        }
+
+        if (!string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("WT_SESSION")) ||
+            string.Equals(Environment.GetEnvironmentVariable("ConEmuANSI"), "ON", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(Environment.GetEnvironmentVariable("ANSICON"), "1", StringComparison.OrdinalIgnoreCase) ||
+            !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("TERM")))
+        {
+            return true;
+        }
+
+        return TryEnableVirtualTerminalProcessing();
+    }
+
+    private static bool TryEnableVirtualTerminalProcessing()
+    {
+        try
+        {
+            var handle = GetStdHandle(StdOutputHandle);
+            if (handle == IntPtr.Zero || handle == InvalidHandleValue)
+            {
+                return false;
+            }
+
+            if (!GetConsoleMode(handle, out var mode))
+            {
+                return false;
+            }
+
+            if ((mode & EnableVirtualTerminalProcessing) != 0)
+            {
+                return true;
+            }
+
+            return SetConsoleMode(handle, mode | EnableVirtualTerminalProcessing);
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private int GetFrameWidth()
@@ -1243,4 +1422,19 @@ internal sealed class AnsiRenderer
             yield return line;
         }
     }
+
+    private static readonly IntPtr InvalidHandleValue = new(-1);
+    private const int StdOutputHandle = -11;
+    private const uint EnableVirtualTerminalProcessing = 0x0004;
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr GetStdHandle(int nStdHandle);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetConsoleMode(IntPtr hConsoleHandle, out uint lpMode);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SetConsoleMode(IntPtr hConsoleHandle, uint dwMode);
 }

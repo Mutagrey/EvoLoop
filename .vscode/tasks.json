@@ -65,39 +65,53 @@
       "problemMatcher": []
     },
     {
-      "label": "Agent: Build",
+      "label": "Agent: Doctor",
       "type": "process",
-      "command": "dotnet",
+      "command": "${workspaceFolder}/scripts/run-agent.sh",
+      "windows": {
+        "command": "${workspaceFolder}\\scripts\\run-agent.cmd"
+      },
       "args": [
-        "build",
-        "${workspaceFolder}/EvoLoopAgent.sln"
+        "doctor"
       ],
       "options": {
-        "cwd": "${workspaceFolder}",
-        "env": {
-          "DOTNET_SKIP_FIRST_TIME_EXPERIENCE": "1",
-          "DOTNET_CLI_TELEMETRY_OPTOUT": "1",
-          "DOTNET_NOLOGO": "1"
-        }
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Agent: Build",
+      "type": "process",
+      "command": "${workspaceFolder}/scripts/build-agent.sh",
+      "windows": {
+        "command": "${workspaceFolder}\\scripts\\build-agent.cmd"
+      },
+      "options": {
+        "cwd": "${workspaceFolder}"
       },
       "problemMatcher": "$msCompile"
     },
     {
       "label": "Agent: Tests",
       "type": "process",
-      "command": "dotnet",
-      "args": [
-        "run",
-        "--project",
-        "${workspaceFolder}/tests/Agent.Tests/Agent.Tests.csproj"
-      ],
+      "command": "${workspaceFolder}/scripts/test-agent.sh",
+      "windows": {
+        "command": "${workspaceFolder}\\scripts\\test-agent.cmd"
+      },
       "options": {
-        "cwd": "${workspaceFolder}",
-        "env": {
-          "DOTNET_SKIP_FIRST_TIME_EXPERIENCE": "1",
-          "DOTNET_CLI_TELEMETRY_OPTOUT": "1",
-          "DOTNET_NOLOGO": "1"
-        }
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Agent: Publish Windows Bundle",
+      "type": "process",
+      "command": "${workspaceFolder}/scripts/publish-win-x64.sh",
+      "windows": {
+        "command": "${workspaceFolder}\\scripts\\publish-win-x64.cmd"
+      },
+      "options": {
+        "cwd": "${workspaceFolder}"
       },
       "problemMatcher": []
     }

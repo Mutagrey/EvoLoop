@@ -81,6 +81,39 @@ public sealed class ModelClientRouter : IModelClientRouter, IDisposable
     }
 }
 
+public sealed class DisabledModelClientRouter : IModelClientRouter
+{
+    private readonly IModelClient _client;
+    private readonly string _message;
+
+    public DisabledModelClientRouter(string message)
+    {
+        _message = message;
+        _client = new DisabledModelClient(message);
+    }
+
+    public IModelClient GetClient(string profileName) => _client;
+
+    public string ResolveModelName(string profileName) => $"disabled:{profileName}";
+}
+
+internal sealed class DisabledModelClient : IModelClient
+{
+    private readonly string _message;
+
+    public DisabledModelClient(string message)
+    {
+        _message = message;
+    }
+
+    public ModelCapabilities Capabilities => new(false, false);
+
+    public Task<ModelTurnResult> CompleteAsync(ModelTurnRequest request, CancellationToken ct)
+    {
+        throw new InvalidOperationException(_message);
+    }
+}
+
 internal abstract class ModelClientBase : IModelClient
 {
     private static readonly JsonSerializerOptions JsonOptions = new()

@@ -18,6 +18,11 @@ public sealed class ExecShellTool : ITool
 
     public async Task<ToolResult> ExecuteAsync(ToolCall call, ToolContext context, CancellationToken ct)
     {
+        if (!context.Capabilities.ShellAvailable)
+        {
+            return new ToolResult(false, "Shell execution is unavailable in the current environment.");
+        }
+
         var command = ToolArgumentReader.GetString(call.Arguments, "command");
         if (string.IsNullOrWhiteSpace(command))
         {

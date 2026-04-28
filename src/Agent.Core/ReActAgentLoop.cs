@@ -57,6 +57,8 @@ public sealed class ReActAgentLoop : IAgentLoop
         var modelName = _modelRouter.ResolveModelName(currentProfileName);
 
         var history = new List<ModelMessage>();
+        history.Add(new ModelMessage("user", BuildRuntimeContextMessage(context.Capabilities)));
+
         if (_config.Runtime.MemoryEnabled)
         {
             var memoryContext = await _memoryStore.LoadContextAsync(request.WorkspaceRoot, request.Task, ct);
@@ -682,6 +684,10 @@ public sealed class ReActAgentLoop : IAgentLoop
         }
 
         sb.AppendLine("Rules:");
+        sb.AppendLine("- The environment may be Windows-first, offline or restricted, and may not allow admin rights or dependency installation.");
+        sb.AppendLine("- Prefer repo-contained, self-contained, low-dependency changes.");
+        sb.AppendLine("- Do not assume package installation, internet downloads, or privileged setup steps are available.");
+        sb.AppendLine("- If runtime capabilities indicate a tool or dependency is unavailable, adapt to the available fallbacks.");
         sb.AppendLine("- You may receive WORKSPACE MEMORY context from previous runs; use it as hint, verify with tools before acting.");
         sb.AppendLine("- Use only listed tools.");
         sb.AppendLine("- Read before you write.");
@@ -707,6 +713,27 @@ public sealed class ReActAgentLoop : IAgentLoop
         }
         sb.AppendLine("{\"type\":\"final\",\"message\":\"Completed requested changes and verified with tool outputs.\"}");
         return sb.ToString();
+    }
+
+    private static string BuildRuntimeContextMessage(RuntimeCapabilities capabilities)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("RUNTIME ENVIRONMENT (verify decisions against these constraints):");
+        sb.AppendLine($"- operating_mode: {capabilities.ModeLabel}");
+        sb.AppendLine($"- platform: {capabilities.Platform}");
+        sb.AppendLine($"- shell_available: {capabilities.ShellAvailable}");
+        sb.AppendLine($"- workspace_writable: {capabilities.WorkspaceWritable}");
+        sb.AppendLine($"- git_available: {capabilities.GitAvailable}");
+        sb.AppendLine($"- rg_available: {capabilities.RipgrepAvailable}");
+        sb.AppendLine($"- sqlite_available: {capabilities.SqliteAvailable}");
+        sb.AppendLine($"- model_configured: {capabilities.ModelConfigured}");
+        sb.AppendLine($"- model_reachable: {capabilities.ModelReachable}");
+        sb.AppendLine("Constraints:");
+        sb.AppendLine("- target workflows should not require admin rights");
+        sb.AppendLine("- avoid proposing dependency installs unless explicitly requested");
+        sb.AppendLine("- prefer self-contained or built-in solutions");
+        sb.AppendLine("- if a capability is unavailable, use fallbacks instead of assuming it exists");
+        return sb.ToString().TrimEnd();
     }
 
     private static string BuildObservationMessage(string toolName, ToolResult result, int maxChars)
