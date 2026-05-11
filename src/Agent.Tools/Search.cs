@@ -1,6 +1,3 @@
-using System.Security.Cryptography;
-using System.Text;
-using System.Text.Json;
 using System.Text.RegularExpressions;
 using Agent.Core;
 
@@ -47,10 +44,10 @@ public sealed class HybridSearchService : ISearchService
         }
 
         var limited = candidates.Take(Math.Min(candidates.Count, _config.Runtime.RerankCandidateLimit)).ToList();
-        var key = BuildRerankCacheKey(task, limited);
+        var key = SearchRanking.BuildRerankCacheKey(task, limited);
         if (_cache.TryGet(key, out var cachedScores) && cachedScores.Count == limited.Count)
         {
-            return MergeScores(limited, cachedScores);
+            return SearchRanking.MergeScores(limited, cachedScores);
         }
 
         try
@@ -110,7 +107,7 @@ public sealed class HybridSearchService : ISearchService
                 continue;
             }
 
-            var lexical = ScoreLexical(query.Query, snippet);
+            var lexical = SearchRanking.ScoreLexical(query.Query, snippet);
             hits.Add(new SearchHit(path, lineNo, snippet, lexical, 0, lexical));
             if (hits.Count >= query.MaxResults * 4)
             {
@@ -146,14 +143,9 @@ public sealed class HybridSearchService : ISearchService
         var hits = new List<SearchHit>();
         var comparison = query.CaseSensitive ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
 
-        foreach (var file in Directory.EnumerateFiles(query.WorkspaceRoot, "*", SearchOption.AllDirectories))
+        foreach (var file in SafeWorkspaceFileEnumerator.EnumerateFiles(query.WorkspaceRoot, query.IncludeHidden, ct))
         {
             ct.ThrowIfCancellationRequested();
-
-            if (ShouldSkipFile(query.WorkspaceRoot, file))
-            {
-                continue;
-            }
 
             if (!string.IsNullOrWhiteSpace(query.Glob) && !Path.GetFileName(file).Contains(query.Glob!.Trim('*'), StringComparison.OrdinalIgnoreCase))
             {
@@ -174,7 +166,7 @@ public sealed class HybridSearchService : ISearchService
             {
                 if (lines[i].Contains(query.Query, comparison))
                 {
-                    var lexical = ScoreLexical(query.Query, lines[i]);
+                    var lexical = SearchRanking.ScoreLexical(query.Query, lines[i]);
                     hits.Add(new SearchHit(Path.GetRelativePath(query.WorkspaceRoot, file), i + 1, lines[i], lexical, 0, lexical));
                 }
             }
@@ -192,7 +184,7 @@ public sealed class HybridSearchService : ISearchService
         var client = _modelRouter.GetClient(profileName);
         var modelName = _modelRouter.ResolveModelName(profileName);
 
-        var prompt = BuildRerankPrompt(task, candidates);
+        var prompt = SearchRanking.BuildRerankPrompt(task, candidates);
         var request = new ModelTurnRequest(
             profileName,
             modelName,
@@ -205,7 +197,7 @@ public sealed class HybridSearchService : ISearchService
             500);
 
         var response = await client.CompleteAsync(request, ct);
-        var ranking = ParseRerankResponse(response.Content, candidates.Count);
+        var ranking = SearchRanking.ParseRerankResponse(response.Content, candidates.Count);
 
         if (ranking.Count == 0)
         {
@@ -225,375 +217,10 @@ public sealed class HybridSearchService : ISearchService
         {
             if (semanticScores[i] <= 0)
             {
-                semanticScores[i] = Normalize(candidates[i].LexicalScore);
+                semanticScores[i] = SearchRanking.Normalize(candidates[i].LexicalScore);
             }
         }
 
-        return MergeScores(candidates, semanticScores);
+        return SearchRanking.MergeScores(candidates, semanticScores);
     }
-
-    private static IReadOnlyList<SearchHit> MergeScores(IReadOnlyList<SearchHit> candidates, IReadOnlyList<double> semanticScores)
-    {
-        var result = new List<SearchHit>(candidates.Count);
-        for (var i = 0; i < candidates.Count; i++)
-        {
-            var lexical = Normalize(candidates[i].LexicalScore);
-            var semantic = Normalize(semanticScores[i]);
-            var finalScore = (lexical * 0.4) + (semantic * 0.6);
-            result.Add(candidates[i] with { SemanticScore = semantic, FinalScore = finalScore });
-        }
-
-        return result.OrderByDescending(x => x.FinalScore).ToList();
-    }
-
-    private static string BuildRerankPrompt(string task, IReadOnlyList<SearchHit> candidates)
-    {
-        var sb = new StringBuilder();
-        sb.AppendLine("Task:");
-        sb.AppendLine(task);
-        sb.AppendLine();
-        sb.AppendLine("Rank the following code snippets by relevance to the task.");
-        sb.AppendLine("Return strict JSON with schema: {\"ranking\":[{\"index\":0,\"score\":0.0}]}");
-        sb.AppendLine("Score range: 0.0 to 1.0");
-
-        for (var i = 0; i < candidates.Count; i++)
-        {
-            var snippet = candidates[i].Snippet;
-            if (snippet.Length > 240)
-            {
-                snippet = snippet[..240];
-            }
-
-            sb.AppendLine($"[{i}] {candidates[i].FilePath}:{candidates[i].Line}");
-            sb.AppendLine(snippet);
-        }
-
-        return sb.ToString();
-    }
-
-    private static List<(int Index, double Score)> ParseRerankResponse(string content, int count)
-    {
-        var list = new List<(int Index, double Score)>();
-
-        try
-        {
-            using var doc = JsonDocument.Parse(content);
-            var root = doc.RootElement;
-            if (!root.TryGetProperty("ranking", out var ranking) || ranking.ValueKind != JsonValueKind.Array)
-            {
-                return list;
-            }
-
-            foreach (var item in ranking.EnumerateArray())
-            {
-                if (!item.TryGetProperty("index", out var indexEl) || !indexEl.TryGetInt32(out var index))
-                {
-                    continue;
-                }
-
-                if (!item.TryGetProperty("score", out var scoreEl) || !scoreEl.TryGetDouble(out var score))
-                {
-                    continue;
-                }
-
-                if (index < 0 || index >= count)
-                {
-                    continue;
-                }
-
-                list.Add((index, score));
-            }
-        }
-        catch
-        {
-            // ignore parse issues and fallback to lexical rank
-        }
-
-        return list;
-    }
-
-    private static bool ShouldSkipFile(string workspaceRoot, string filePath)
-    {
-        var rel = Path.GetRelativePath(workspaceRoot, filePath);
-        if (rel.StartsWith(".git", StringComparison.OrdinalIgnoreCase) ||
-            rel.StartsWith("obj", StringComparison.OrdinalIgnoreCase) ||
-            rel.StartsWith("bin", StringComparison.OrdinalIgnoreCase))
-        {
-            return true;
-        }
-
-        var extension = Path.GetExtension(filePath);
-        var blocked = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-        {
-            ".png", ".jpg", ".jpeg", ".gif", ".zip", ".exe", ".dll", ".so", ".dylib", ".pdf"
-        };
-
-        return blocked.Contains(extension);
-    }
-
-    private static double ScoreLexical(string query, string text)
-    {
-        var words = query.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        if (words.Length == 0)
-        {
-            return 0;
-        }
-
-        var score = 0.0;
-        foreach (var word in words)
-        {
-            score += CountOccurrences(text, word) * 1.5;
-            if (text.Contains(word, StringComparison.OrdinalIgnoreCase))
-            {
-                score += 1;
-            }
-        }
-
-        score += Math.Max(0, 1.0 - (text.Length / 400.0));
-        return score;
-    }
-
-    private static int CountOccurrences(string text, string value)
-    {
-        if (string.IsNullOrEmpty(value))
-        {
-            return 0;
-        }
-
-        var count = 0;
-        var index = 0;
-        while ((index = text.IndexOf(value, index, StringComparison.OrdinalIgnoreCase)) >= 0)
-        {
-            count++;
-            index += value.Length;
-        }
-
-        return count;
-    }
-
-    private static double Normalize(double value)
-    {
-        if (value <= 0)
-        {
-            return 0;
-        }
-
-        return value > 1 ? 1 : value;
-    }
-
-    private static string BuildRerankCacheKey(string task, IReadOnlyList<SearchHit> candidates)
-    {
-        var sb = new StringBuilder();
-        sb.Append(task);
-        foreach (var c in candidates)
-        {
-            sb.Append('|').Append(c.FilePath).Append(':').Append(c.Line).Append(':').Append(c.Snippet);
-        }
-
-        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(sb.ToString()));
-        return Convert.ToHexString(bytes);
-    }
-}
-
-public sealed class SearchLexicalTool : ITool
-{
-    public string Name => "search_lexical";
-    public ToolMetadata Metadata => new(ToolRiskLevel.Low, ToolCategory.Search, false, Array.Empty<string>());
-
-    public ToolSchema Schema => new(
-        "Search workspace using lexical matching.",
-        new[] { "query" },
-        new Dictionary<string, string>
-        {
-            ["query"] = "Text to search.",
-            ["max_results"] = "Maximum number of hits.",
-            ["glob"] = "Optional glob pattern.",
-            ["case_sensitive"] = "Case sensitive search.",
-            ["include_hidden"] = "Include hidden files."
-        });
-
-    public async Task<ToolResult> ExecuteAsync(ToolCall call, ToolContext context, CancellationToken ct)
-    {
-        var query = ToolArgumentReader.GetString(call.Arguments, "query") ?? string.Empty;
-        if (string.IsNullOrWhiteSpace(query))
-        {
-            return new ToolResult(false, "Missing required argument: query");
-        }
-
-        var request = new SearchQuery(
-            context.WorkspaceRoot,
-            query,
-            Math.Clamp(ToolArgumentReader.GetInt32(call.Arguments, "max_results", context.Config.Runtime.LexicalSearchDefaultMaxResults), 1, 200),
-            ToolArgumentReader.GetString(call.Arguments, "glob"),
-            ToolArgumentReader.GetBool(call.Arguments, "case_sensitive", false),
-            ToolArgumentReader.GetBool(call.Arguments, "include_hidden", false));
-
-        var hits = await context.SearchService.LexicalAsync(request, ct);
-        var modeSuffix = context.Capabilities.RipgrepAvailable
-            ? "rg-enabled"
-            : "fallback scanner (rg unavailable)";
-        return new ToolResult(true, $"Lexical search returned {hits.Count} hits via {modeSuffix}.", FormatHits(hits));
-    }
-
-    private static string FormatHits(IReadOnlyList<SearchHit> hits)
-    {
-        var sb = new StringBuilder();
-        foreach (var hit in hits)
-        {
-            sb.AppendLine($"{hit.FilePath}:{hit.Line} [lex={hit.LexicalScore:F3}] {hit.Snippet}");
-        }
-
-        return sb.ToString();
-    }
-}
-
-public sealed class SearchSemanticTool : ITool
-{
-    public string Name => "search_semantic";
-    public ToolMetadata Metadata => new(ToolRiskLevel.Low, ToolCategory.Search, false, new[] { "model" });
-
-    public ToolSchema Schema => new(
-        "Semantic-like search using lexical retrieval + LLM rerank.",
-        new[] { "query" },
-        new Dictionary<string, string>
-        {
-            ["query"] = "Search query.",
-            ["task"] = "Task context used for reranking.",
-            ["max_results"] = "Maximum final results.",
-            ["glob"] = "Optional glob pattern."
-        });
-
-    public async Task<ToolResult> ExecuteAsync(ToolCall call, ToolContext context, CancellationToken ct)
-    {
-        var query = ToolArgumentReader.GetString(call.Arguments, "query") ?? string.Empty;
-        if (string.IsNullOrWhiteSpace(query))
-        {
-            return new ToolResult(false, "Missing required argument: query");
-        }
-
-        var task = ToolArgumentReader.GetString(call.Arguments, "task") ?? query;
-        var maxResults = Math.Clamp(ToolArgumentReader.GetInt32(call.Arguments, "max_results", 10), 1, 100);
-        var glob = ToolArgumentReader.GetString(call.Arguments, "glob");
-
-        var lexical = await context.SearchService.LexicalAsync(new SearchQuery(
-            context.WorkspaceRoot,
-            query,
-            Math.Max(maxResults * 3, 15),
-            glob,
-            false,
-            false), ct);
-
-        IReadOnlyList<SearchHit> reranked;
-        string mode;
-        if (!context.Capabilities.CanRunAgentTasks || context.ExecutionMode == AgentExecutionMode.Review)
-        {
-            reranked = lexical;
-            mode = "lexical-only fallback (model rerank unavailable)";
-        }
-        else
-        {
-            reranked = await context.SearchService.RerankAsync(task, lexical, ct);
-            mode = "lexical retrieval + model rerank";
-        }
-
-        var top = reranked.Take(maxResults).ToList();
-
-        var sb = new StringBuilder();
-        foreach (var hit in top)
-        {
-            sb.AppendLine($"{hit.FilePath}:{hit.Line} [lex={hit.LexicalScore:F3} sem={hit.SemanticScore:F3} final={hit.FinalScore:F3}] {hit.Snippet}");
-        }
-
-        return new ToolResult(true, $"Semantic search returned {top.Count} hits via {mode}.", sb.ToString());
-    }
-}
-
-internal sealed class RerankCache
-{
-    private readonly string _filePath;
-    private readonly SemaphoreSlim _gate = new(1, 1);
-    private readonly Dictionary<string, double[]> _cache = new(StringComparer.Ordinal);
-    private bool _loaded;
-
-    public RerankCache(string filePath)
-    {
-        _filePath = filePath;
-    }
-
-    public bool TryGet(string key, out IReadOnlyList<double> scores)
-    {
-        EnsureLoaded();
-        if (_cache.TryGetValue(key, out var value))
-        {
-            scores = value;
-            return true;
-        }
-
-        scores = Array.Empty<double>();
-        return false;
-    }
-
-    public async Task SaveAsync(string key, IReadOnlyList<double> scores, CancellationToken ct)
-    {
-        EnsureLoaded();
-        var cloned = scores.ToArray();
-        _cache[key] = cloned;
-
-        var dir = Path.GetDirectoryName(_filePath);
-        if (!string.IsNullOrWhiteSpace(dir))
-        {
-            Directory.CreateDirectory(dir);
-        }
-
-        var payload = JsonSerializer.Serialize(new CacheEntry(key, cloned));
-
-        await _gate.WaitAsync(ct);
-        try
-        {
-            await File.AppendAllTextAsync(_filePath, payload + Environment.NewLine, ct);
-        }
-        finally
-        {
-            _gate.Release();
-        }
-    }
-
-    private void EnsureLoaded()
-    {
-        if (_loaded)
-        {
-            return;
-        }
-
-        _loaded = true;
-        if (!File.Exists(_filePath))
-        {
-            return;
-        }
-
-        foreach (var line in File.ReadLines(_filePath))
-        {
-            if (string.IsNullOrWhiteSpace(line))
-            {
-                continue;
-            }
-
-            try
-            {
-                var entry = JsonSerializer.Deserialize<CacheEntry>(line);
-                if (entry is null || string.IsNullOrWhiteSpace(entry.Key) || entry.Scores is null)
-                {
-                    continue;
-                }
-
-                _cache[entry.Key] = entry.Scores;
-            }
-            catch
-            {
-                // ignore corrupted cache lines
-            }
-        }
-    }
-
-    private sealed record CacheEntry(string Key, double[] Scores);
 }

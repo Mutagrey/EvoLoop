@@ -36,4 +36,18 @@ copy /Y "%REPO_ROOT%\artifacts\publish\win-arm64\*.pdb" "%RELEASE_ROOT%\win-arm6
 copy /Y "%REPO_ROOT%\config\corporate.offline.config.json" "%RELEASE_ROOT%\win-x64\config.json.example" >nul
 copy /Y "%REPO_ROOT%\config\corporate.offline.config.json" "%RELEASE_ROOT%\win-arm64\config.json.example" >nul
 
+(
+  echo @echo off
+  echo setlocal
+  echo "%%~dp0Agent.Cli.exe" --workspace "%%cd%%" %%*
+  echo endlocal
+) > "%RELEASE_ROOT%\win-x64\agent.cmd"
+
+(
+  echo @echo off
+  echo setlocal
+  echo "%%~dp0Agent.Cli.exe" --workspace "%%cd%%" %%*
+  echo endlocal
+) > "%RELEASE_ROOT%\win-arm64\agent.cmd"
+
 endlocal

@@ -157,3 +157,15 @@ Skills use progressive disclosure only. At startup the context builder scans `.e
 - Providers do not know about workspace policy.
 - EvoLoop does not import or depend on EvoLoopAI, and Pi is used only as architectural inspiration for normalized messages, adapters, first-class tool calls/results, and progressive disclosure.
 - Docs should describe behavior once and link elsewhere for detail.
+
+## Development Guardrails
+
+- `Agent.Cli` stays a thin host: argument parsing, config loading, capability probing, dependency wiring, and dispatch. REPL/session flows belong in focused internal classes.
+- `Agent.Core` owns contracts, policy, path safety, runtime capabilities, normalized messages, prompt/context construction, and ReAct orchestration.
+- `Agent.Tools` owns local tool implementations only. Tools must use `ToolContext` for capabilities, patch service, search service, event logging, and workspace root.
+- `Agent.Providers` owns model gateway protocol adaptation only. It must not inspect workspace paths, approvals, or command policy.
+- `Agent.Storage` owns JSONL/session/memory persistence and degraded no-op fallbacks.
+- New public CLI commands, tool names, config fields, and project references are compatibility surfaces and need a docs/testing update.
+- New helper types should be `internal` unless they are part of a deliberate cross-assembly contract.
+- Shell remains fallback-only. Add or improve a specialized tool before expanding shell usage.
+- Restricted-machine assumptions win over convenience: no install-time setup, no required internet access, and no new package dependency unless explicitly justified.

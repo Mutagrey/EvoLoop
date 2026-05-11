@@ -33,3 +33,12 @@ cp "$repo_root/artifacts/publish/win-arm64/Agent.Cli.exe" "$release_root/win-arm
 cp "$repo_root/artifacts/publish/win-arm64/"*.pdb "$release_root/win-arm64/"
 cp "$repo_root/config/corporate.offline.config.json" "$release_root/win-x64/config.json.example"
 cp "$repo_root/config/corporate.offline.config.json" "$release_root/win-arm64/config.json.example"
+
+for target in win-x64 win-arm64; do
+  cat > "$release_root/$target/agent.cmd" <<'EOF'
+@echo off
+setlocal
+"%~dp0Agent.Cli.exe" --workspace "%cd%" %*
+endlocal
+EOF
+done

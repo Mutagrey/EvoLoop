@@ -38,8 +38,8 @@ public static class PathSafety
             throw new InvalidOperationException($"Path is outside workspace: '{path}'.");
         }
 
-        var canonicalRoot = GetCanonicalPath(root) ?? root;
-        var canonicalResolved = GetCanonicalPath(resolved) ?? resolved;
+        var canonicalRoot = GetCanonicalCandidatePath(root) ?? root;
+        var canonicalResolved = GetCanonicalCandidatePath(resolved) ?? resolved;
         if (!IsWithinWorkspace(canonicalRoot, canonicalResolved))
         {
             throw new InvalidOperationException($"Path escapes workspace through link traversal: '{path}'.");
@@ -118,6 +118,46 @@ public static class PathSafety
             }
 
             return Path.GetFullPath(path);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static string? GetCanonicalCandidatePath(string path)
+    {
+        try
+        {
+            var fullPath = Path.GetFullPath(path);
+            var root = Path.GetPathRoot(fullPath);
+            if (string.IsNullOrWhiteSpace(root))
+            {
+                return GetCanonicalPath(fullPath);
+            }
+
+            var canonical = root;
+            var current = root;
+            var parts = fullPath[root.Length..]
+                .Split(new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar }, StringSplitOptions.RemoveEmptyEntries);
+
+            foreach (var part in parts)
+            {
+                var next = Path.Combine(current, part);
+                var canonicalNext = Path.Combine(canonical, part);
+
+                if (File.Exists(next) || Directory.Exists(next))
+                {
+                    canonical = GetCanonicalPath(canonicalNext) ?? GetCanonicalPath(next) ?? canonicalNext;
+                    current = next;
+                    continue;
+                }
+
+                canonical = canonicalNext;
+                current = next;
+            }
+
+            return Path.GetFullPath(canonical);
         }
         catch
         {

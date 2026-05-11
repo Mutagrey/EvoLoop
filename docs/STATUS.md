@@ -33,6 +33,13 @@
 - Preserved JSON-ReAct as the default fallback mode and formalized plain-text `Action`/`Arguments` recovery as a last-resort parser.
 - Added JSON Schema conversion for tool schemas, tightened obvious schema defaults, and added runtime validation for `fs_patch` content/diff requirements.
 - Added progressive-disclosure skills indexing for `.evoloop/skills/*/SKILL.md`.
+- Added stricter architecture/development guardrails to `AGENTS.md` and `docs/ARCHITECTURE.md`.
+- Split CLI session handling out of `Program.cs`.
+- Split search tools, rerank cache, search ranking, and safe fallback file enumeration into focused files.
+- Shared text/scalar extraction between tool argument reading and ReAct recovery.
+- Hardened symlink traversal checks for non-existing write/patch targets.
+- Tightened fallback search/path scanning around generated, storage, and binary paths.
+- Made Windows release bundle scripts regenerate `agent.cmd` wrappers.
 
 ## Current Problems
 
@@ -40,6 +47,7 @@
 - The agent still depends on a remote/local model gateway for autonomous `run` and `plan` execution; `local-only degraded` mode is still diagnostic-safe, not a replacement for a local model runtime.
 - `dotnet run --project tests/Agent.Tests/Agent.Tests.csproj` can still hang in this macOS workspace while spawning MSBuild child nodes; build the solution first and run the compiled test DLL directly as documented in `docs/TESTING.md`.
 - Snapshot diff output is currently optimized for the most recent mutation, not for a full multi-file workspace review baseline.
+- The committed Windows bundles remain intentionally tracked for now; this cleanup did not change the delivery model.
 
 ## Next Improvements
 

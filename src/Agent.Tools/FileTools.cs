@@ -161,7 +161,7 @@ public sealed class FsPatchTool : ITool
     public ToolMetadata Metadata => new(ToolRiskLevel.High, ToolCategory.FileWrite, true, new[] { "workspace_write" });
 
     public ToolSchema Schema => new(
-        "Apply a unified diff patch using git apply, or write full content fallback.",
+        "Apply a unified diff patch using the built-in patch service, or write full content fallback.",
         new[] { "path" },
         new Dictionary<string, string>
         {

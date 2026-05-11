@@ -243,7 +243,7 @@ public sealed partial class ReActAgentLoop
         }
 
         string? match = null;
-        foreach (var file in Directory.EnumerateFiles(workspaceRoot, "*", SearchOption.AllDirectories))
+        foreach (var file in EnumeratePathHintFiles(workspaceRoot))
         {
             if (!Path.GetFileName(file).Equals(fileName, StringComparison.OrdinalIgnoreCase))
             {
@@ -277,9 +277,77 @@ public sealed partial class ReActAgentLoop
     {
         var rel = relativePath.Replace('\\', '/');
         return rel.StartsWith(".git/", StringComparison.OrdinalIgnoreCase) ||
+               rel.StartsWith(".evoloop/storage/", StringComparison.OrdinalIgnoreCase) ||
+               rel.StartsWith(".tooling/", StringComparison.OrdinalIgnoreCase) ||
+               rel.StartsWith("artifacts/", StringComparison.OrdinalIgnoreCase) ||
                rel.StartsWith("bin/", StringComparison.OrdinalIgnoreCase) ||
                rel.StartsWith("obj/", StringComparison.OrdinalIgnoreCase) ||
-               rel.StartsWith(".evoloop/", StringComparison.OrdinalIgnoreCase);
+               IsBinaryPath(rel);
+    }
+
+    private static IEnumerable<string> EnumeratePathHintFiles(string workspaceRoot)
+    {
+        var pending = new Stack<string>();
+        pending.Push(workspaceRoot);
+
+        while (pending.Count > 0)
+        {
+            var directory = pending.Pop();
+
+            IEnumerable<string> directories;
+            try
+            {
+                directories = Directory.EnumerateDirectories(directory);
+            }
+            catch
+            {
+                directories = Array.Empty<string>();
+            }
+
+            foreach (var child in directories)
+            {
+                var relative = Path.GetRelativePath(workspaceRoot, child).Replace('\\', '/');
+                if (!ShouldSkipPathScan(relative + "/"))
+                {
+                    pending.Push(child);
+                }
+            }
+
+            IEnumerable<string> files;
+            try
+            {
+                files = Directory.EnumerateFiles(directory);
+            }
+            catch
+            {
+                files = Array.Empty<string>();
+            }
+
+            foreach (var file in files)
+            {
+                var relative = Path.GetRelativePath(workspaceRoot, file).Replace('\\', '/');
+                if (!ShouldSkipPathScan(relative))
+                {
+                    yield return file;
+                }
+            }
+        }
+    }
+
+    private static bool IsBinaryPath(string relativePath)
+    {
+        var extension = Path.GetExtension(relativePath);
+        return extension.Equals(".dll", StringComparison.OrdinalIgnoreCase) ||
+               extension.Equals(".dylib", StringComparison.OrdinalIgnoreCase) ||
+               extension.Equals(".exe", StringComparison.OrdinalIgnoreCase) ||
+               extension.Equals(".gif", StringComparison.OrdinalIgnoreCase) ||
+               extension.Equals(".jpg", StringComparison.OrdinalIgnoreCase) ||
+               extension.Equals(".jpeg", StringComparison.OrdinalIgnoreCase) ||
+               extension.Equals(".pdb", StringComparison.OrdinalIgnoreCase) ||
+               extension.Equals(".pdf", StringComparison.OrdinalIgnoreCase) ||
+               extension.Equals(".png", StringComparison.OrdinalIgnoreCase) ||
+               extension.Equals(".so", StringComparison.OrdinalIgnoreCase) ||
+               extension.Equals(".zip", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool TryExtractSearchHitPath(string line, out string path)

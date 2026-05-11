@@ -250,82 +250,16 @@ public sealed partial class ReActAgentLoop
     }
 
     private static bool TryExtractNamedScalarValue(string rawModelOutput, IReadOnlyList<string> keys, out string value)
-    {
-        value = string.Empty;
-        if (string.IsNullOrWhiteSpace(rawModelOutput) || keys.Count == 0)
-        {
-            return false;
-        }
-
-        var keyExpr = string.Join("|", keys.Select(Regex.Escape));
-        var linePattern = $@"(?im)^\s*(?:[-*]\s*)?(?:[""'`])?(?:{keyExpr})(?:[""'`])?\s*[:=]\s*(?<v>.+?)\s*$";
-        var lineMatch = Regex.Match(rawModelOutput, linePattern);
-        if (lineMatch.Success)
-        {
-            var extracted = lineMatch.Groups["v"].Value.Trim().Trim('"', '\'', '`');
-            if (!string.IsNullOrWhiteSpace(extracted))
-            {
-                value = extracted;
-                return true;
-            }
-        }
-
-        var jsonPattern = $"(?is)\\\"(?:{keyExpr})\\\"\\s*:\\s*\\\"(?<v>[^\\\"]{{1,5000}})\\\"";
-        var jsonMatch = Regex.Match(rawModelOutput, jsonPattern);
-        if (jsonMatch.Success)
-        {
-            var extracted = jsonMatch.Groups["v"].Value.Trim();
-            if (!string.IsNullOrWhiteSpace(extracted))
-            {
-                value = extracted;
-                return true;
-            }
-        }
-
-        var singleQuotedPattern = $"(?is)'(?:{keyExpr})'\\s*:\\s*'(?<v>[^']{{1,5000}})'";
-        var singleQuotedMatch = Regex.Match(rawModelOutput, singleQuotedPattern);
-        if (singleQuotedMatch.Success)
-        {
-            var extracted = singleQuotedMatch.Groups["v"].Value.Trim();
-            if (!string.IsNullOrWhiteSpace(extracted))
-            {
-                value = extracted;
-                return true;
-            }
-        }
-
-        return false;
-    }
+        => TextScalarExtraction.TryExtractByNamedKeys(rawModelOutput, keys, out value);
 
     private static List<(string Lang, string Body)> ExtractCodeFences(string text)
-    {
-        var result = new List<(string Lang, string Body)>();
-        if (string.IsNullOrWhiteSpace(text))
-        {
-            return result;
-        }
-
-        foreach (Match match in Regex.Matches(text, "```(?<lang>[^\\r\\n`]*)\\r?\\n(?<body>[\\s\\S]*?)```"))
-        {
-            var lang = (match.Groups["lang"].Value ?? string.Empty).Trim();
-            var body = match.Groups["body"].Value ?? string.Empty;
-            result.Add((lang, body));
-        }
-
-        return result;
-    }
+        => TextScalarExtraction.ExtractCodeFences(text);
 
     private static bool IsShellLanguage(string lang)
-    {
-        var normalized = (lang ?? string.Empty).Trim().ToLowerInvariant();
-        return normalized is "bash" or "sh" or "zsh" or "shell" or "console" or "cmd" or "bat" or "powershell" or "ps1";
-    }
+        => TextScalarExtraction.IsShellLanguage(lang);
 
     private static bool IsDiffLanguage(string lang)
-    {
-        var normalized = (lang ?? string.Empty).Trim().ToLowerInvariant();
-        return normalized is "diff" or "patch";
-    }
+        => TextScalarExtraction.IsDiffLanguage(lang);
 
     private static bool LooksLikeCommandBlock(string body)
     {
@@ -344,35 +278,6 @@ public sealed partial class ReActAgentLoop
     }
 
     private static string NormalizeShellCommandBlock(string body)
-    {
-        if (string.IsNullOrWhiteSpace(body))
-        {
-            return string.Empty;
-        }
-
-        var lines = body
-            .Replace("\r\n", "\n")
-            .Replace('\r', '\n')
-            .Split('\n')
-            .Select(line => line.Trim())
-            .Where(line => line.Length > 0)
-            .Select(line =>
-            {
-                if (line.StartsWith("$ ", StringComparison.Ordinal))
-                {
-                    return line[2..].Trim();
-                }
-
-                if (line.StartsWith("PS> ", StringComparison.OrdinalIgnoreCase))
-                {
-                    return line[4..].Trim();
-                }
-
-                return line;
-            })
-            .ToList();
-
-        return string.Join('\n', lines);
-    }
+        => TextScalarExtraction.NormalizeShellCommandBlock(body);
 
 }

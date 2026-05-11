@@ -33,8 +33,8 @@ scripts\publish-win-x64.cmd
 Smoke test on target machine:
 
 ```powershell
-.\EvoLoop.Agent.exe doctor
-.\EvoLoop.Agent.exe
+.\agent.cmd doctor
+.\agent.cmd run "inspect repository and summarize current issues"
 ```
 
 ## Required Scenarios
@@ -51,6 +51,8 @@ Smoke test on target machine:
 - `fs_patch` -> built-in patch apply works without `git`
 - `workspace_undo` -> most recent file mutation is reversible from snapshot storage
 - protected paths like `.env` or `.git/config` -> mutation denied by policy/path safety
+- symlink traversal -> writes and patches through symlinked directories cannot escape the workspace
+- fallback scanner -> skips `.git`, `.evoloop/storage`, `bin`, `obj`, `artifacts`, and binary files while tolerating inaccessible paths
 - typed JSONL event log -> session/model/tool/approval/final events are persisted under `.evoloop/storage/events.jsonl`
 - native non-streaming tools -> OpenAI-compatible `choices[].message.tool_calls` normalize to `ToolCallBlock`, execute locally, and append `role=tool` results
 - native streaming tools -> fragmented `choices[].delta.tool_calls[].function.arguments` reconstruct into valid JSON arguments

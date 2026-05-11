@@ -353,38 +353,7 @@ public static class ToolArgumentReader
     }
 
     private static bool TryExtractByNamedKeys(string raw, IReadOnlyList<string> keys, out string value)
-    {
-        value = string.Empty;
-        foreach (var key in keys)
-        {
-            var escaped = Regex.Escape(key);
-            var quoted = Regex.Match(
-                raw,
-                $"(?is)[\"']{escaped}[\"']\\s*[:=]\\s*[\"'`](?<v>[^\"'`\\r\\n]{{1,6000}})[\"'`]");
-            if (quoted.Success)
-            {
-                value = quoted.Groups["v"].Value.Trim();
-                if (!string.IsNullOrWhiteSpace(value))
-                {
-                    return true;
-                }
-            }
-
-            var line = Regex.Match(
-                raw,
-                $@"(?im)^\s*(?:[-*]\s*)?(?:[""'`])?{escaped}(?:[""'`])?\s*[:=]\s*(?<v>.+?)\s*$");
-            if (line.Success)
-            {
-                value = line.Groups["v"].Value.Trim().Trim('"', '\'', '`');
-                if (!string.IsNullOrWhiteSpace(value))
-                {
-                    return true;
-                }
-            }
-        }
-
-        return false;
-    }
+        => TextScalarExtraction.TryExtractByNamedKeys(raw, keys, out value);
 
     private static bool TryExtractCommandFromText(string raw, out string command)
     {
@@ -405,10 +374,10 @@ public static class ToolArgumentReader
             }
         }
 
-        foreach (Match match in Regex.Matches(raw, "```(?<lang>[^\\r\\n`]*)\\r?\\n(?<body>[\\s\\S]*?)```"))
+        foreach (var match in TextScalarExtraction.ExtractCodeFences(raw))
         {
-            var lang = (match.Groups["lang"].Value ?? string.Empty).Trim().ToLowerInvariant();
-            var body = (match.Groups["body"].Value ?? string.Empty).Trim();
+            var lang = match.Lang.Trim().ToLowerInvariant();
+            var body = match.Body.Trim();
             if (string.IsNullOrWhiteSpace(body))
             {
                 continue;
@@ -509,15 +478,15 @@ public static class ToolArgumentReader
             return !string.IsNullOrWhiteSpace(content);
         }
 
-        foreach (Match match in Regex.Matches(raw, "```(?<lang>[^\\r\\n`]*)\\r?\\n(?<body>[\\s\\S]*?)```"))
+        foreach (var match in TextScalarExtraction.ExtractCodeFences(raw))
         {
-            var lang = (match.Groups["lang"].Value ?? string.Empty).Trim().ToLowerInvariant();
+            var lang = match.Lang.Trim().ToLowerInvariant();
             if (lang is "diff" or "patch" or "bash" or "sh" or "zsh" or "shell" or "powershell" or "pwsh" or "cmd")
             {
                 continue;
             }
 
-            var body = (match.Groups["body"].Value ?? string.Empty).Trim('\r', '\n');
+            var body = match.Body.Trim('\r', '\n');
             if (!string.IsNullOrWhiteSpace(body))
             {
                 content = ClipScalar(body, 32000);

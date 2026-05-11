@@ -50,7 +50,7 @@ That refreshes:
 ## First Run
 
 ```powershell
-.\EvoLoop.Agent.exe doctor
+.\agent.cmd doctor
 ```
 
 Use `doctor` before task execution to confirm:
