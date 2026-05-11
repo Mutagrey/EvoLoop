@@ -27,12 +27,18 @@
 - Hardened path safety for protected paths such as `.git/config`, hooks, and `.env*`.
 - Made JSONL the canonical typed event log even when `sqlite3` is available.
 - Added project source-of-truth document loading for `AGENTS.md`, architecture, operating modes, and status docs.
+- Added normalized internal assistant/user/tool-result messages with first-class text, thinking, tool-call, and tool-result blocks.
+- Added model adapter contracts and wired `ReActAgentLoop` through adapter-normalized `AssistantMessage` results while preserving the public CLI loop.
+- Added OpenAI-compatible native non-streaming and streaming tool-call parsing, including fragmented streaming `delta.tool_calls` argument accumulation.
+- Preserved JSON-ReAct as the default fallback mode and formalized plain-text `Action`/`Arguments` recovery as a last-resort parser.
+- Added JSON Schema conversion for tool schemas, tightened obvious schema defaults, and added runtime validation for `fs_patch` content/diff requirements.
+- Added progressive-disclosure skills indexing for `.evoloop/skills/*/SKILL.md`.
 
 ## Current Problems
 
 - No packaged Windows smoke test has been executed yet against the new `win-x64` publish path.
 - The agent still depends on a remote/local model gateway for autonomous `run` and `plan` execution; `local-only degraded` mode is still diagnostic-safe, not a replacement for a local model runtime.
-- `Agent.Core`, `Agent.Tools`, `Agent.Storage`, and `Agent.Providers` compile with the bundled local `.NET 8` SDK in this workspace, but `Agent.Cli` and `Agent.Tests` hang during executable-project build here, so end-to-end verification is incomplete in this environment.
+- `dotnet run --project tests/Agent.Tests/Agent.Tests.csproj` can still hang in this macOS workspace while spawning MSBuild child nodes; build the solution first and run the compiled test DLL directly as documented in `docs/TESTING.md`.
 - Snapshot diff output is currently optimized for the most recent mutation, not for a full multi-file workspace review baseline.
 
 ## Next Improvements
@@ -41,4 +47,5 @@
 - Smoke-test the self-contained Windows artifact on a restricted non-admin machine.
 - Add richer review summarization for multi-file snapshot diffs and directory deletions.
 - Add tests for non-writable snapshot storage, undo failure recovery, and review-mode fallback behavior.
+- Exercise native tool calling against real corporate OpenAI-compatible gateways in all supported modes.
 - Remove leftover machine-specific clutter files from version control as part of a dedicated cleanup pass.

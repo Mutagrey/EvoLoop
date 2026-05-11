@@ -21,6 +21,10 @@ Runtime modes:
 - `offline-strict`: same as `full`, but network shell commands stay constrained by policy
 - `local-only degraded`: CLI starts, diagnostics/config/tools remain usable, but model-backed agent tasks are blocked with a clear message
 
+Model tool calling:
+- JSON-ReAct fallback remains the default for compatibility
+- OpenAI-compatible native non-streaming/streaming tools are available as opt-in profile modes
+
 Console behavior:
 - ANSI-capable terminals use colored status output and live step spinner
 - plain Windows `cmd` falls back to plain ASCII output without ANSI escape noise

@@ -6,7 +6,7 @@ using Agent.Core;
 
 namespace Agent.Providers;
 
-public sealed class ModelClientRouter : IModelClientRouter, IDisposable
+public sealed class ModelClientRouter : IModelClientRouter, IModelAdapterRouter, IDisposable
 {
     private readonly AgentConfig _config;
     private readonly HttpClient _httpClient;
@@ -53,6 +53,12 @@ public sealed class ModelClientRouter : IModelClientRouter, IDisposable
         throw new InvalidOperationException($"Model profile '{profileName}' not found in config.");
     }
 
+    public IModelAdapter GetAdapter(string profileName, ToolCallingMode requestedMode)
+    {
+        var client = GetClient(profileName);
+        return client is IModelAdapter adapter ? adapter : new ModelClientBackedAdapter(client);
+    }
+
     public void Dispose()
     {
         _httpClient.Dispose();
@@ -81,7 +87,7 @@ public sealed class ModelClientRouter : IModelClientRouter, IDisposable
     }
 }
 
-public sealed class DisabledModelClientRouter : IModelClientRouter
+public sealed class DisabledModelClientRouter : IModelClientRouter, IModelAdapterRouter
 {
     private readonly IModelClient _client;
     private readonly string _message;
@@ -95,6 +101,9 @@ public sealed class DisabledModelClientRouter : IModelClientRouter
     public IModelClient GetClient(string profileName) => _client;
 
     public string ResolveModelName(string profileName) => $"disabled:{profileName}";
+
+    public IModelAdapter GetAdapter(string profileName, ToolCallingMode requestedMode)
+        => new ModelClientBackedAdapter(_client);
 }
 
 internal sealed class DisabledModelClient : IModelClient
@@ -324,11 +333,48 @@ internal enum SystemPromptDeliveryMode
     Both
 }
 
-internal sealed class OpenAiCompatibleClient : ModelClientBase
+internal sealed class OpenAiCompatibleClient : ModelClientBase, IModelAdapter
 {
+    private ToolCallingMode? _probedMode;
+
     public OpenAiCompatibleClient(HttpClient httpClient, AgentConfig config, ModelProfileConfig profile)
         : base(httpClient, config, profile)
     {
+    }
+
+    public ModelAdapterCapabilities AdapterCapabilities { get; } = new(
+        new NativeToolSupport(true, true),
+        new JsonModeSupport(true),
+        new StreamingToolSupport(true));
+
+    public async Task<ModelAdapterTurnResult> CompleteTurnAsync(ModelAdapterTurnRequest request, CancellationToken ct)
+    {
+        var mode = request.ToolCallingMode;
+        if (mode == ToolCallingMode.Auto)
+        {
+            mode = Profile.ProbeToolCalling
+                ? await ProbeNativeToolModeAsync(request, ct)
+                : ToolCallingMode.NativeNonStreamingTools;
+        }
+
+        if (mode == ToolCallingMode.NativeStreamingTools)
+        {
+            return await CompleteNativeStreamingAsync(request, ct);
+        }
+
+        if (mode == ToolCallingMode.NativeNonStreamingTools)
+        {
+            try
+            {
+                return await CompleteNativeNonStreamingAsync(request, ct);
+            }
+            catch (InvalidOperationException) when (request.ToolCallingMode == ToolCallingMode.Auto)
+            {
+                return await CompleteJsonFallbackAsync(request, ct);
+            }
+        }
+
+        return await CompleteJsonFallbackAsync(request, ct);
     }
 
     protected override async Task<ModelTurnResult> CompleteCoreAsync(ModelTurnRequest request, CancellationToken ct)
@@ -360,6 +406,259 @@ internal sealed class OpenAiCompatibleClient : ModelClientBase
         }
 
         return new ModelTurnResult(content, model, prompt, completion, total, raw);
+    }
+
+    private async Task<ModelAdapterTurnResult> CompleteJsonFallbackAsync(ModelAdapterTurnRequest request, CancellationToken ct)
+    {
+        var result = await CompleteAsync(new ModelTurnRequest(
+            request.ProfileName,
+            request.Model,
+            request.SystemPrompt,
+            request.Messages,
+            request.Temperature,
+            request.MaxTokens,
+            request.Metadata), ct);
+
+        var assistant = JsonReActResponseParser.Parse(
+            result.Content,
+            request.Tools.Select(tool => tool.Name),
+            allowPlainTextRecovery: true,
+            mode: ToolCallingMode.JsonReActFallback);
+
+        return new ModelAdapterTurnResult(
+            assistant,
+            result.Model,
+            result.PromptTokens,
+            result.CompletionTokens,
+            result.TotalTokens,
+            result.Raw,
+            ToolCallingMode.JsonReActFallback);
+    }
+
+    private async Task<ModelAdapterTurnResult> CompleteNativeNonStreamingAsync(ModelAdapterTurnRequest request, CancellationToken ct)
+    {
+        var endpoint = BuildEndpoint(Config.Api.BaseUrl, Config.Api.OpenAiCompatiblePath);
+        EnsureEndpointAllowed(endpoint);
+        var initialMode = ResolveSystemPromptMode();
+        var (statusCode, raw) = await SendNativeWithPromptFallbackAsync(endpoint, request, initialMode, stream: false, ct);
+
+        if (!IsSuccessStatusCode(statusCode))
+        {
+            throw new InvalidOperationException(BuildNativeToolError("OpenAI-compatible native tools", statusCode, endpoint, raw));
+        }
+
+        var parsed = OpenAiCompatibleToolCallParser.ParseNonStreaming(raw, request.Model, ToolCallingMode.NativeNonStreamingTools);
+        return parsed;
+    }
+
+    private async Task<ModelAdapterTurnResult> CompleteNativeStreamingAsync(ModelAdapterTurnRequest request, CancellationToken ct)
+    {
+        var endpoint = BuildEndpoint(Config.Api.BaseUrl, Config.Api.OpenAiCompatiblePath);
+        EnsureEndpointAllowed(endpoint);
+        var raw = await SendNativeStreamingRequestAsync(endpoint, request, ResolveSystemPromptMode(), ct);
+        return OpenAiCompatibleToolCallParser.ParseStreaming(raw, request.Model);
+    }
+
+    private async Task<ToolCallingMode> ProbeNativeToolModeAsync(ModelAdapterTurnRequest request, CancellationToken ct)
+    {
+        if (_probedMode is { } cached)
+        {
+            return cached;
+        }
+
+        var probeTool = new ProbeTool();
+        var probeRequest = request with
+        {
+            Messages = new[] { new ModelMessage("user", "Call the evoloop_probe_noop tool with {\"ok\":true}.") },
+            InternalMessages = new InternalMessage[] { new UserMessage("Call the evoloop_probe_noop tool with {\"ok\":true}.") },
+            Tools = new ITool[] { probeTool },
+            MaxTokens = Math.Min(request.MaxTokens, 128),
+            ToolCallingMode = ToolCallingMode.NativeNonStreamingTools
+        };
+
+        try
+        {
+            var result = await CompleteNativeNonStreamingAsync(probeRequest, ct);
+            _probedMode = result.AssistantMessage.ToolCalls.Any(call =>
+                call.Name.Value.Equals(probeTool.Name, StringComparison.OrdinalIgnoreCase))
+                ? ToolCallingMode.NativeNonStreamingTools
+                : ToolCallingMode.JsonReActFallback;
+        }
+        catch
+        {
+            _probedMode = ToolCallingMode.JsonReActFallback;
+        }
+
+        return _probedMode.Value;
+    }
+
+    private async Task<(HttpStatusCode StatusCode, string Raw)> SendNativeWithPromptFallbackAsync(
+        Uri endpoint,
+        ModelAdapterTurnRequest request,
+        SystemPromptDeliveryMode initialMode,
+        bool stream,
+        CancellationToken ct)
+    {
+        var (statusCode, raw) = await SendNativeOpenAiRequestAsync(endpoint, request, initialMode, stream, ct);
+        if (!IsSuccessStatusCode(statusCode) &&
+            ShouldFallbackSystemPromptToUserMessage(initialMode) &&
+            IsSystemPromptRejected(statusCode, raw))
+        {
+            (statusCode, raw) = await SendNativeOpenAiRequestAsync(endpoint, request, SystemPromptDeliveryMode.UserMessage, stream, ct);
+        }
+
+        return (statusCode, raw);
+    }
+
+    private async Task<(HttpStatusCode StatusCode, string Raw)> SendNativeOpenAiRequestAsync(
+        Uri endpoint,
+        ModelAdapterTurnRequest request,
+        SystemPromptDeliveryMode mode,
+        bool stream,
+        CancellationToken ct)
+    {
+        var payload = new
+        {
+            model = request.Model,
+            stream,
+            temperature = request.Temperature,
+            max_tokens = request.MaxTokens,
+            messages = BuildNativeMessages(request, mode),
+            tools = BuildOpenAiTools(request.Tools),
+            tool_choice = "auto"
+        };
+
+        using var httpRequest = new HttpRequestMessage(HttpMethod.Post, endpoint)
+        {
+            Content = JsonBody(payload)
+        };
+
+        using var response = await HttpClient.SendAsync(httpRequest, ct);
+        var raw = await response.Content.ReadAsStringAsync(ct);
+        return (response.StatusCode, raw);
+    }
+
+    private async Task<string> SendNativeStreamingRequestAsync(
+        Uri endpoint,
+        ModelAdapterTurnRequest request,
+        SystemPromptDeliveryMode mode,
+        CancellationToken ct)
+    {
+        var payload = new
+        {
+            model = request.Model,
+            stream = true,
+            temperature = request.Temperature,
+            max_tokens = request.MaxTokens,
+            messages = BuildNativeMessages(request, mode),
+            tools = BuildOpenAiTools(request.Tools),
+            tool_choice = "auto"
+        };
+
+        using var httpRequest = new HttpRequestMessage(HttpMethod.Post, endpoint)
+        {
+            Content = JsonBody(payload)
+        };
+
+        using var response = await HttpClient.SendAsync(httpRequest, HttpCompletionOption.ResponseHeadersRead, ct);
+        var raw = await response.Content.ReadAsStringAsync(ct);
+        if (!IsSuccessStatusCode(response.StatusCode))
+        {
+            throw new InvalidOperationException(BuildNativeToolError("OpenAI-compatible streaming native tools", response.StatusCode, endpoint, raw));
+        }
+
+        return raw;
+    }
+
+    private static List<object> BuildNativeMessages(ModelAdapterTurnRequest request, SystemPromptDeliveryMode mode)
+    {
+        var list = new List<object>();
+        if (mode == SystemPromptDeliveryMode.System || mode == SystemPromptDeliveryMode.Both)
+        {
+            list.Add(new { role = "system", content = request.SystemPrompt });
+        }
+
+        if (mode == SystemPromptDeliveryMode.UserMessage || mode == SystemPromptDeliveryMode.Both)
+        {
+            list.Add(new { role = "user", content = BuildSystemPromptAsUserMessage(request.SystemPrompt) });
+        }
+
+        foreach (var message in request.Messages)
+        {
+            if (message.Role.Equals("assistant", StringComparison.OrdinalIgnoreCase) &&
+                message.ToolCalls is { Count: > 0 })
+            {
+                list.Add(new
+                {
+                    role = "assistant",
+                    content = string.IsNullOrWhiteSpace(message.Content) ? null : message.Content,
+                    tool_calls = message.ToolCalls.Select(call => new
+                    {
+                        id = call.Id.Value,
+                        type = "function",
+                        function = new
+                        {
+                            name = call.Name.Value,
+                            arguments = call.Arguments.GetRawText()
+                        }
+                    }).ToArray()
+                });
+                continue;
+            }
+
+            if (message.Role.Equals("tool", StringComparison.OrdinalIgnoreCase))
+            {
+                if (string.IsNullOrWhiteSpace(message.ToolCallId))
+                {
+                    list.Add(new { role = "user", content = "OBSERVATION: " + message.Content });
+                    continue;
+                }
+
+                list.Add(new
+                {
+                    role = "tool",
+                    tool_call_id = message.ToolCallId,
+                    content = message.Content
+                });
+                continue;
+            }
+
+            list.Add(new { role = message.Role, content = message.Content });
+        }
+
+        return list;
+    }
+
+    private static object[] BuildOpenAiTools(IEnumerable<ITool> tools)
+    {
+        return tools
+            .GroupBy(tool => tool.Name, StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.First())
+            .OrderBy(tool => tool.Name, StringComparer.OrdinalIgnoreCase)
+            .Select(tool => new
+            {
+                type = "function",
+                function = new
+                {
+                    name = tool.Name,
+                    description = tool.Schema.Description,
+                    parameters = ToolSchemaJsonSchemaConverter.ToJsonSchema(tool)
+                }
+            })
+            .Cast<object>()
+            .ToArray();
+    }
+
+    private static string BuildNativeToolError(string label, HttpStatusCode statusCode, Uri endpoint, string raw)
+    {
+        var baseMessage = BuildHttpError(label, statusCode, endpoint, raw);
+        if (raw.Contains("tool", StringComparison.OrdinalIgnoreCase) ||
+            raw.Contains("function", StringComparison.OrdinalIgnoreCase))
+        {
+            return baseMessage + " Native tool calling appears unsupported or rejected by this provider.";
+        }
+
+        return baseMessage;
     }
 
     private async Task<(HttpStatusCode StatusCode, string Raw)> SendWithPromptFallbackAsync(
@@ -449,11 +748,131 @@ internal sealed class OpenAiCompatibleClient : ModelClientBase
     }
 }
 
-internal sealed class CustomGatewayClient : ModelClientBase
+internal sealed class StreamingToolCallAccumulator
+{
+    private readonly StringBuilder _arguments = new();
+
+    public StreamingToolCallAccumulator(int index)
+    {
+        Index = index;
+    }
+
+    public int Index { get; }
+    public string? Id { get; private set; }
+    public string? Name { get; private set; }
+
+    public void ApplyDelta(JsonElement delta)
+    {
+        if (delta.TryGetProperty("id", out var idEl) && idEl.ValueKind == JsonValueKind.String)
+        {
+            Id = idEl.GetString() ?? Id;
+        }
+
+        if (!delta.TryGetProperty("function", out var functionEl) || functionEl.ValueKind != JsonValueKind.Object)
+        {
+            return;
+        }
+
+        if (functionEl.TryGetProperty("name", out var nameEl) && nameEl.ValueKind == JsonValueKind.String)
+        {
+            Name = nameEl.GetString() ?? Name;
+        }
+
+        if (functionEl.TryGetProperty("arguments", out var argsEl) && argsEl.ValueKind == JsonValueKind.String)
+        {
+            _arguments.Append(argsEl.GetString());
+        }
+    }
+
+    public bool TryBuild(out ToolCallBlock block, out string error)
+    {
+        block = null!;
+        error = string.Empty;
+        if (string.IsNullOrWhiteSpace(Id))
+        {
+            error = $"Malformed streaming native tool call at index {Index}: missing tool call id.";
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(Name))
+        {
+            error = $"Malformed streaming native tool call at index {Index}: missing function name.";
+            return false;
+        }
+
+        var rawArgs = _arguments.Length == 0 ? "{}" : _arguments.ToString();
+        try
+        {
+            using var doc = JsonDocument.Parse(rawArgs);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object)
+            {
+                error = $"Malformed streaming native tool call at index {Index}: arguments must be a JSON object.";
+                return false;
+            }
+
+            block = new ToolCallBlock(
+                new ToolCallId(Id!),
+                new ToolName(Name!),
+                doc.RootElement.Clone(),
+                "native streaming tool call",
+                new Dictionary<string, string> { ["index"] = Index.ToString() });
+            return true;
+        }
+        catch (Exception ex)
+        {
+            error = $"Malformed streaming native tool call at index {Index}: invalid JSON arguments. {ex.Message}";
+            return false;
+        }
+    }
+}
+
+internal sealed class ProbeTool : ITool
+{
+    public string Name => "evoloop_probe_noop";
+    public ToolSchema Schema => new(
+        "Safe no-op probe used by EvoLoop to detect native tool-call support.",
+        Array.Empty<string>(),
+        new Dictionary<string, string> { ["ok"] = "Any boolean marker." });
+    public ToolMetadata Metadata => new(ToolRiskLevel.Low, ToolCategory.Status, false, Array.Empty<string>());
+
+    public Task<ToolResult> ExecuteAsync(ToolCall call, ToolContext context, CancellationToken ct)
+        => Task.FromResult(new ToolResult(true, "probe noop"));
+}
+
+internal sealed class CustomGatewayClient : ModelClientBase, IModelAdapter
 {
     public CustomGatewayClient(HttpClient httpClient, AgentConfig config, ModelProfileConfig profile)
         : base(httpClient, config, profile)
     {
+    }
+
+    public ModelAdapterCapabilities AdapterCapabilities => ModelAdapterCapabilities.JsonOnly;
+
+    public async Task<ModelAdapterTurnResult> CompleteTurnAsync(ModelAdapterTurnRequest request, CancellationToken ct)
+    {
+        var result = await CompleteAsync(new ModelTurnRequest(
+            request.ProfileName,
+            request.Model,
+            request.SystemPrompt,
+            request.Messages,
+            request.Temperature,
+            request.MaxTokens,
+            request.Metadata), ct);
+
+        var assistant = JsonReActResponseParser.Parse(
+            result.Content,
+            request.Tools.Select(tool => tool.Name),
+            allowPlainTextRecovery: true,
+            mode: ToolCallingMode.JsonReActFallback);
+
+        return new ModelAdapterTurnResult(
+            assistant,
+            result.Model,
+            result.PromptTokens,
+            result.CompletionTokens,
+            result.TotalTokens,
+            result.Raw,
+            ToolCallingMode.JsonReActFallback);
     }
 
     protected override async Task<ModelTurnResult> CompleteCoreAsync(ModelTurnRequest request, CancellationToken ct)

@@ -75,3 +75,12 @@ Behavior:
 - missing `sqlite3` -> JSONL remains the only event store
 - non-writable workspace -> no persistent sessions or memory
 - unavailable model rerank -> `search_semantic` falls back to lexical-only output with explicit degraded messaging
+
+## Model Tool Calling
+
+Tool-calling mode is separate from runtime and execution mode.
+
+- Existing model profiles default to `JsonReActFallback`.
+- `NativeNonStreamingTools`, `NativeStreamingTools`, and `Auto` are opt-in per model profile.
+- `Auto` may probe a gateway with a safe no-op tool and falls back to JSON-ReAct when native tools are rejected or ignored.
+- `local-only degraded` still blocks model-backed `run` and `plan` tasks before any model adapter is called.

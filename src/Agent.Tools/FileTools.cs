@@ -10,7 +10,7 @@ public sealed class FsListTool : ITool
 
     public ToolSchema Schema => new(
         "List directory entries.",
-        new[] { "path" },
+        Array.Empty<string>(),
         new Dictionary<string, string>
         {
             ["path"] = "Path relative to workspace.",

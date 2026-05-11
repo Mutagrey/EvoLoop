@@ -2,21 +2,22 @@
 
 ## Summary
 
-EvoLoop is a model-backed coding agent CLI with explicit fallback behavior for restricted environments. The architecture is organized around two central rules:
+EvoLoop is a model-backed coding agent CLI with explicit fallback behavior for restricted environments. The architecture is organized around three central rules:
 
 - **environment capability detection happens before agent execution**
 - **the model proposes actions, but the local harness decides whether they are allowed and performs them**
+- **provider-specific tool formats are normalized before the runtime executes anything**
 
 ## Components
 
 - `Agent.Cli`
   Startup, CLI parsing, REPL, `doctor`, command dispatch for `run`, `plan`, and `review`, degraded-mode gating.
 - `Agent.Core`
-  Contracts, execution modes, approval policy, ReAct loop, prompt/context builders, tool-turn orchestration, runtime capability model.
+  Contracts, execution modes, approval policy, normalized message/tool-call model, model adapter contracts, ReAct-compatible runtime loop, prompt/context builders, tool-turn orchestration, runtime capability model.
 - `Agent.Tools`
   File, git, shell, search, snapshot diff, and undo tools. Tools expose metadata such as risk, category, mutation behavior, and required capabilities.
 - `Agent.Providers`
-  Model gateway access only. No policy or workspace logic belongs here.
+  Model gateway access and provider-specific request/response adaptation only. No policy or workspace logic belongs here.
 - `Agent.Storage`
   Session and memory persistence. JSONL is the canonical event log; optional SQLite is only a projection/cache when available.
 
@@ -53,15 +54,51 @@ These capabilities drive both:
 The core execution model is a local agent harness:
 
 1. build prompt and context from policy, project instructions, runtime capabilities, task, and memory
-2. ask the model for one structured decision
-3. parse the decision into `tool`, `final`, or `clarify`
-4. validate the tool call against tool schema, execution mode, approval mode, and command policy
-5. optionally request user approval
-6. execute the tool locally
-7. append observations and typed events
-8. repeat until final answer or stop condition
+2. choose a model adapter and tool-calling mode from profile configuration/capability probing
+3. ask the model for a turn
+4. normalize the provider response into internal assistant content blocks
+5. extract first-class `ToolCallBlock` values or a final/clarifying text response
+6. validate tool arguments against tool schema and runtime-specific checks
+7. evaluate execution mode, approval mode, path safety, and command policy
+8. optionally request user approval
+9. execute the tool locally through `IToolTurnExecutor`
+10. append a structured `ToolResultMessage` and typed events
+11. repeat until final answer, approval wait/rejection, max steps, or error
 
 The model never writes files or runs commands directly. File and shell effects always pass through the harness.
+
+## Internal Message Model
+
+The runtime uses normalized internal structures before tool execution:
+
+- `UserMessage`
+- `AssistantMessage`
+- `TextBlock`
+- `ThinkingBlock`
+- `ToolCallBlock`
+- `ToolResultMessage`
+- `ToolCallId`
+- `ToolName`
+- `ToolResultContent`
+
+Existing `ToolCall`, `ToolResult`, and `ITool` contracts remain compatible. `ToolCallBlock` converts into the existing `ToolCall` shape before policy and execution.
+
+## Tool Calling Modes
+
+Profiles default to `JsonReActFallback` for compatibility with restricted corporate gateways. Other modes are opt-in through model profile configuration.
+
+- `NativeNonStreamingTools`
+  Sends OpenAI-compatible `tools` and `tool_choice="auto"`, parses `choices[].message.tool_calls`, and returns tool results as `role="tool"` with `tool_call_id`.
+- `NativeStreamingTools`
+  Sends OpenAI-compatible native tools with `stream=true`, accumulates fragmented `choices[].delta.tool_calls[].function.arguments`, and normalizes the completed call.
+- `JsonReActFallback`
+  Sends no native tool list. The prompt requires one strict JSON object: tool, final, or clarify.
+- `PlainTextRecoveryFallback`
+  Last-resort parser for weak model output such as `Action: fs_read` plus `Arguments: {...}`.
+- `Auto`
+  Optional OpenAI-compatible mode that can probe native non-streaming tool support with a safe `evoloop_probe_noop` tool, then falls back to JSON-ReAct if unsupported or ignored.
+
+Native tool support is never assumed. Provider-specific payloads and parsing stay in `Agent.Providers`; the runtime only executes normalized tool blocks.
 
 ## Execution Modes
 
@@ -93,6 +130,7 @@ The model never writes files or runs commands directly. File and shell effects a
   - `DangerFullAccess`
 - `exec_shell` is fallback-only and must not be the default mechanism when specialized tools can do the work.
 - `plan` and `review` modes deny workspace mutations even if the model requests them.
+- Tool validation failures, policy denials, approval rejections, thrown tool exceptions, and failed tools are represented as structured tool-error results for the next model turn.
 
 ## Workspace Mutation Model
 
@@ -107,10 +145,15 @@ The model never writes files or runs commands directly. File and shell effects a
 - Typed JSONL events also persist under `.evoloop/storage/events.jsonl`.
 - Event log records include session start/end, model requests, tool calls, tool results, approvals, file mutations, and final answer.
 
+## Skills
+
+Skills use progressive disclosure only. At startup the context builder scans `.evoloop/skills/*/SKILL.md`, extracts a name, short description, and relative path, and injects only that index. The model must read the full `SKILL.md` through `fs_read` before applying it.
+
 ## Boundaries
 
 - CLI decides whether the run may start.
 - Core decides how the agent loop behaves and how prompt/context/policy/tool execution are composed.
 - Tools do not guess capability state; they read it from `ToolContext`.
 - Providers do not know about workspace policy.
+- EvoLoop does not import or depend on EvoLoopAI, and Pi is used only as architectural inspiration for normalized messages, adapters, first-class tool calls/results, and progressive disclosure.
 - Docs should describe behavior once and link elsewhere for detail.

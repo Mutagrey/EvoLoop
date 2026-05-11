@@ -117,7 +117,7 @@ public sealed class GitShowTool : ITool
 
     public ToolSchema Schema => new(
         "Show a commit or object.",
-        new[] { "ref" },
+        Array.Empty<string>(),
         new Dictionary<string, string>
         {
             ["ref"] = "Commit SHA, branch, or tag to inspect."

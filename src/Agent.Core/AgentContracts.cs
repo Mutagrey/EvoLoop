@@ -198,9 +198,18 @@ public enum ToolCategory
     Memory
 }
 
-public sealed record ModelCapabilities(bool SupportsStreaming, bool SupportsEmbeddings);
+public sealed record ModelCapabilities(
+    bool SupportsStreaming,
+    bool SupportsEmbeddings,
+    NativeToolSupport? NativeTools = null,
+    JsonModeSupport? JsonMode = null);
 
-public sealed record ModelMessage(string Role, string Content);
+public sealed record ModelMessage(
+    string Role,
+    string Content,
+    string? ToolCallId = null,
+    string? ToolName = null,
+    IReadOnlyList<ToolCallBlock>? ToolCalls = null);
 
 public sealed record ModelTurnRequest(
     string ProfileName,
@@ -478,6 +487,8 @@ public sealed class ModelProfileConfig
     public string Model { get; init; } = "qwen";
     public double Temperature { get; init; } = 0.2;
     public int MaxTokens { get; init; } = 1200;
+    public ToolCallingMode ToolCallingMode { get; init; } = ToolCallingMode.JsonReActFallback;
+    public bool ProbeToolCalling { get; init; } = false;
 }
 
 public sealed class WorkspaceConfig

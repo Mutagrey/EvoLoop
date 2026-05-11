@@ -57,12 +57,6 @@ public sealed class DefaultPolicyEngine : IPolicyEngine
                 return new PolicyDecision(PolicyDecisionKind.Deny, "Shell command is empty.");
             }
 
-            var commandDecision = _commandPolicy.Evaluate(command, context, metadata);
-            if (commandDecision.Kind != PolicyDecisionKind.Allow)
-            {
-                return new PolicyDecision(commandDecision.Kind, commandDecision.Reason);
-            }
-
             if (_config.Safety.OfflineStrictMode && IsNetworkShellCommand(command))
             {
                 if (ReferencesAllowedHost(command, _allowedNetworkHosts))
@@ -81,6 +75,12 @@ public sealed class DefaultPolicyEngine : IPolicyEngine
                     command.Contains(pattern, StringComparison.OrdinalIgnoreCase)))
             {
                 return new PolicyDecision(PolicyDecisionKind.Deny, "Shell command matches denied pattern.");
+            }
+
+            var commandDecision = _commandPolicy.Evaluate(command, context, metadata);
+            if (commandDecision.Kind != PolicyDecisionKind.Allow)
+            {
+                return new PolicyDecision(commandDecision.Kind, commandDecision.Reason);
             }
 
             if (context.ApprovalMode == ApprovalPolicyMode.WorkspaceWrite)

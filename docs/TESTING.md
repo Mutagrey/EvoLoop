@@ -15,6 +15,13 @@ dotnet run --project src/Agent.Cli -- plan "inspect architecture gaps"
 dotnet run --project src/Agent.Cli -- review
 ```
 
+If `dotnet run --project tests/Agent.Tests/Agent.Tests.csproj` hangs while spawning MSBuild child nodes, use the two-step path:
+
+```bash
+dotnet build EvoLoopAgent.sln --no-restore
+dotnet tests/Agent.Tests/bin/Debug/net8.0/Agent.Tests.dll
+```
+
 ## Windows Packaging Validation
 
 Build:
@@ -45,9 +52,15 @@ Smoke test on target machine:
 - `workspace_undo` -> most recent file mutation is reversible from snapshot storage
 - protected paths like `.env` or `.git/config` -> mutation denied by policy/path safety
 - typed JSONL event log -> session/model/tool/approval/final events are persisted under `.evoloop/storage/events.jsonl`
+- native non-streaming tools -> OpenAI-compatible `choices[].message.tool_calls` normalize to `ToolCallBlock`, execute locally, and append `role=tool` results
+- native streaming tools -> fragmented `choices[].delta.tool_calls[].function.arguments` reconstruct into valid JSON arguments
+- JSON-ReAct fallback -> strict JSON tool/final objects execute through the same policy and tool executor
+- plain-text recovery -> `Action:` and `Arguments:` output is used only as a last-resort parser
+- failed tools -> next turn receives a structured `ToolResultMessage` with `IsError=true`
+- skills index -> `.evoloop/skills/*/SKILL.md` contributes only name/description/path until a tool reads the full file
 
 ## Notes
 
 - This repository intentionally uses a lightweight custom test harness instead of an external test framework.
 - If the local machine only has `.NET 6` or no compatible SDK, treat that as an environment blocker rather than a repository success signal.
-- In the current macOS workspace, the bundled `.NET 8` SDK can compile the library projects, but executable-project builds may hang; validate CLI/tests again on a second machine before treating the change as fully verified.
+- In the current macOS workspace, `dotnet run --project tests/Agent.Tests/Agent.Tests.csproj` may hang before harness output. A direct `dotnet tests/Agent.Tests/bin/Debug/net8.0/Agent.Tests.dll` run after `dotnet build` is the current local workaround.
