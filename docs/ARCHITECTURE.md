@@ -11,7 +11,7 @@ EvoLoop is a model-backed coding agent CLI with explicit fallback behavior for r
 ## Components
 
 - `Agent.Cli`
-  Startup, CLI parsing, REPL, `doctor`, command dispatch for `run`, `plan`, and `review`, degraded-mode gating.
+  Startup, CLI parsing, TUI/REPL dispatch, `doctor`, command dispatch for `run`, `plan`, and `review`, degraded-mode gating.
 - `Agent.Core`
   Contracts, execution modes, approval policy, normalized message/tool-call model, model adapter contracts, ReAct-compatible runtime loop, prompt/context builders, tool-turn orchestration, runtime capability model.
 - `Agent.Tools`
@@ -108,8 +108,10 @@ Native tool support is never assumed. Provider-specific payloads and parsing sta
   Analysis-only execution. Mutating tools, `exec_shell`, staging, and commits are denied by policy.
 - `review`
   Inspection-only execution. The agent should prefer `git_diff` when `git` exists and `workspace_snapshot_diff` otherwise.
-- `interactive`
-  REPL surface that can dispatch `run`, `plan`, and `review` turns.
+- `tui`
+  Default interactive surface reached by bare `agent` or `agent tui`. Current implementation is a prepared placeholder.
+- `repl`
+  Legacy line-based REPL surface reached by `agent repl`; it can dispatch `run`, `plan`, and `review` turns.
 
 ## Operating Contract
 
@@ -151,7 +153,7 @@ Skills use progressive disclosure only. At startup the context builder scans `.e
 
 ## Boundaries
 
-- CLI decides whether the run may start.
+- CLI decides whether TUI, REPL, diagnostics, or single-turn execution starts.
 - Core decides how the agent loop behaves and how prompt/context/policy/tool execution are composed.
 - Tools do not guess capability state; they read it from `ToolContext`.
 - Providers do not know about workspace policy.
@@ -165,7 +167,7 @@ Skills use progressive disclosure only. At startup the context builder scans `.e
 - `Agent.Tools` owns local tool implementations only. Tools must use `ToolContext` for capabilities, patch service, search service, event logging, and workspace root.
 - `Agent.Providers` owns model gateway protocol adaptation only. It must not inspect workspace paths, approvals, or command policy.
 - `Agent.Storage` owns JSONL/session/memory persistence and degraded no-op fallbacks.
-- New public CLI commands, tool names, config fields, and project references are compatibility surfaces and need a docs/testing update.
+- New public CLI commands, default entry behavior, tool names, config fields, and project references are compatibility surfaces and need a docs/testing update.
 - New helper types should be `internal` unless they are part of a deliberate cross-assembly contract.
 - Shell remains fallback-only. Add or improve a specialized tool before expanding shell usage.
 - Restricted-machine assumptions win over convenience: no install-time setup, no required internet access, and no new package dependency unless explicitly justified.

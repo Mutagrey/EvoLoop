@@ -4,7 +4,8 @@ namespace Agent.Cli;
 
 internal enum CliMode
 {
-    Interactive,
+    Tui,
+    Repl,
     Run,
     Plan,
     Review,
@@ -13,7 +14,7 @@ internal enum CliMode
 
 internal sealed class CliArguments
 {
-    public CliMode Mode { get; init; } = CliMode.Interactive;
+    public CliMode Mode { get; init; } = CliMode.Tui;
     public string? Task { get; init; }
     public string Profile { get; init; } = "reasoning";
     public string? Workspace { get; init; }
@@ -23,7 +24,7 @@ internal sealed class CliArguments
 
     public static CliArguments Parse(string[] args)
     {
-        var mode = CliMode.Interactive;
+        var mode = CliMode.Tui;
         string? task = null;
         var profile = "reasoning";
         string? workspace = null;
@@ -67,6 +68,18 @@ internal sealed class CliArguments
             mode = CliMode.Doctor;
             i = 1;
         }
+        else if (args.Length > 0 && args[0].Equals("tui", StringComparison.OrdinalIgnoreCase))
+        {
+            mode = CliMode.Tui;
+            i = 1;
+        }
+        else if (args.Length > 0 &&
+                 (args[0].Equals("repl", StringComparison.OrdinalIgnoreCase) ||
+                  args[0].Equals("interactive", StringComparison.OrdinalIgnoreCase)))
+        {
+            mode = CliMode.Repl;
+            i = 1;
+        }
 
         for (; i < args.Length; i++)
         {
@@ -74,6 +87,9 @@ internal sealed class CliArguments
             switch (arg)
             {
                 case "--profile" when i + 1 < args.Length:
+                    profile = args[++i];
+                    break;
+                case "--model" when i + 1 < args.Length:
                     profile = args[++i];
                     break;
                 case "--workspace" when i + 1 < args.Length:
@@ -111,4 +127,3 @@ internal sealed class CliArguments
         };
     }
 }
-

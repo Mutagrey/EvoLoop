@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Reflection;
 using System.Runtime.Loader;
+using Agent.Cli;
 using Agent.Core;
 using Agent.Providers;
 using Agent.Storage;
@@ -10,6 +11,7 @@ AssemblyLoadContext.Default.Resolving += ResolveFromOutput;
 
 var tests = new List<(string Name, Func<Task> Run)>
 {
+    ("CLI parser defaults to TUI and preserves explicit modes", TestCliParserModes),
     ("Policy denies outside workspace", TestPolicyDeniesOutsideWorkspace),
     ("Policy denies sibling path prefix bypass", TestPolicyDeniesSiblingPrefixBypass),
     ("Policy denies exec_shell cwd outside workspace", TestPolicyDeniesExecShellCwdOutsideWorkspace),
@@ -88,6 +90,28 @@ static Assembly? ResolveFromOutput(AssemblyLoadContext context, AssemblyName nam
 
     var candidate = Path.Combine(AppContext.BaseDirectory, $"{name.Name}.dll");
     return File.Exists(candidate) ? context.LoadFromAssemblyPath(candidate) : null;
+}
+
+static Task TestCliParserModes()
+{
+    var empty = CliArguments.Parse(Array.Empty<string>());
+    Assert(empty.Mode == CliMode.Tui, "Expected bare agent to start TUI.");
+
+    var tui = CliArguments.Parse(new[] { "tui", "--workspace", ".", "--model", "fast" });
+    Assert(tui.Mode == CliMode.Tui, "Expected explicit tui mode.");
+    Assert(tui.Workspace == ".", "Expected workspace option to be parsed.");
+    Assert(tui.Profile == "fast", "Expected --model to map to profile.");
+
+    var repl = CliArguments.Parse(new[] { "repl", "--profile", "reasoning" });
+    Assert(repl.Mode == CliMode.Repl, "Expected repl mode.");
+    Assert(repl.Profile == "reasoning", "Expected profile option to be parsed.");
+
+    var run = CliArguments.Parse(new[] { "run", "inspect", "--offline-strict" });
+    Assert(run.Mode == CliMode.Run, "Expected run mode.");
+    Assert(run.Task == "inspect", "Expected run task to be parsed.");
+    Assert(run.OfflineStrict, "Expected offline strict flag.");
+
+    return Task.CompletedTask;
 }
 
 static Task TestPolicyDeniesOutsideWorkspace()

@@ -1,0 +1,37 @@
+{
+  "version": 2,
+  "dependencies": {
+    "net8.0": {
+      "agent.cli": {
+        "type": "Project",
+        "dependencies": {
+          "Agent.Core": "[1.0.0, )",
+          "Agent.Providers": "[1.0.0, )",
+          "Agent.Storage": "[1.0.0, )",
+          "Agent.Tools": "[1.0.0, )"
+        }
+      },
+      "agent.core": {
+        "type": "Project"
+      },
+      "agent.providers": {
+        "type": "Project",
+        "dependencies": {
+          "Agent.Core": "[1.0.0, )"
+        }
+      },
+      "agent.storage": {
+        "type": "Project",
+        "dependencies": {
+          "Agent.Core": "[1.0.0, )"
+        }
+      },
+      "agent.tools": {
+        "type": "Project",
+        "dependencies": {
+          "Agent.Core": "[1.0.0, )"
+        }
+      }
+    }
+  }
+}

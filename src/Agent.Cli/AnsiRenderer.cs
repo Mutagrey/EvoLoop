@@ -24,7 +24,7 @@ internal sealed class AnsiRenderer
     {
         var width = GetFrameWidth();
         WriteRaw(Colorize(title, ConsoleColor.Cyan));
-        WriteRaw(Colorize("Autonomous coding agent CLI", ConsoleColor.DarkGray));
+        WriteRaw(Colorize("Local coding agent", ConsoleColor.DarkGray));
         WriteRaw(Colorize(new string('-', width), ConsoleColor.DarkGray));
     }
 

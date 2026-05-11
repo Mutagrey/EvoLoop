@@ -11,6 +11,7 @@ Commands:
 dotnet build EvoLoopAgent.sln
 dotnet run --project tests/Agent.Tests/Agent.Tests.csproj
 dotnet run --project src/Agent.Cli -- doctor
+dotnet run --project src/Agent.Cli --
 dotnet run --project src/Agent.Cli -- plan "inspect architecture gaps"
 dotnet run --project src/Agent.Cli -- review
 ```
@@ -60,6 +61,9 @@ Smoke test on target machine:
 - plain-text recovery -> `Action:` and `Arguments:` output is used only as a last-resort parser
 - failed tools -> next turn receives a structured `ToolResultMessage` with `IsError=true`
 - skills index -> `.evoloop/skills/*/SKILL.md` contributes only name/description/path until a tool reads the full file
+- bare `agent` -> enters the TUI placeholder
+- `agent repl` -> enters the legacy line-based REPL
+- vendored TUI packages -> package files exist under `vendor/nuget`; no online-only TUI reference is required until the minimal TUI shell is implemented
 
 ## Notes
 

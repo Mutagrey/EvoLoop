@@ -1,103 +1,58 @@
-# TUI Interface Blueprint for Local Coding Agent
+# TUI Specification
 
-## Context
+## Summary
 
-We are building a local-first C#/.NET coding agent inspired by Claude Code-style terminal UX.
+The main interactive terminal surface is `agent` with no subcommand. Explicit command-line modes remain available through `agent run`, `agent plan`, `agent review`, `agent doctor`, and `agent repl`.
 
-The project should work on a restricted corporate Windows machine:
-- No admin rights.
-- Limited internet access.
-- Prefer built-in .NET APIs and vendored dependencies.
-- Do not introduce Node.js, npm, React, Vite, Python, Docker, or cloud-only dependencies.
-- The app should run as a CLI/TUI executable.
-- The agent talks to an OpenAI-compatible corporate API through a local proxy.
-- The system should remain local-first: local JSON storage, local workspace, local logs.
+The TUI is owned by the CLI layer. Agent execution, policy, tools, providers, and storage remain in their existing layers.
 
-The goal is not to clone Claude Code visually one-to-one, but to create a professional terminal interface with similar usability:
-- convenient chat flow;
-- visible agent progress;
-- slash commands;
-- command suggestions;
-- readable tool calls;
-- approvals;
-- diffs;
-- session history;
-- clear status/errors;
-- useful message rendering.
+## First Target
 
----
+Current implementation target:
 
-# Main Goal
+- prepare the CLI/TUI split without a second executable
+- make bare `agent` enter the TUI path
+- keep the old line REPL available as `agent repl`
+- vendor the TUI dependency packages for later offline restore
+- do not implement the full TUI shell yet
 
-Design and implement a production-grade TUI layer for the local coding agent.
+The current TUI path is a placeholder that reports the workspace, profile, runtime mode, and available explicit commands.
 
-The TUI should become the main interactive interface for using the agent from terminal.
+## Dependency Policy
 
-It must support:
+TUI dependencies must be restorable without nuget.org in normal repo restore. Packages live under `vendor/nuget`, and package versions are centralized in `Directory.Packages.props`.
 
-1. Chat input with multiline editing.
-2. Slash-command menu when the user types `/`.
-3. Streaming assistant output.
-4. Visible agent steps: thinking/status, tool calls, file reads, patches, approvals.
-5. Safe workspace operations.
-6. Useful rendering of messages, code blocks, diffs, errors, and tool results.
-7. Session tree / history navigation.
-8. Keyboard-first UX.
-9. Clean architecture, separated from agent runtime.
-10. Testable components.
+Prepared dependency:
 
----
+- `Terminal.Gui` `1.19.0`
 
-# Important Constraint
+`Terminal.Gui` `2.1.0` targets `net10.0` only and is not compatible with the current `net8.0` project. `Terminal.Gui` `2.0.0` supports `net8.0` but pulls a larger dependency graph, including Roslyn and logging packages, so it is not the first choice for this Windows-first low-dependency app.
 
-Do not rewrite the whole project.
+## Runtime Shape
 
-First inspect the existing repository structure and identify:
-- current CLI entry point;
-- current agent runtime;
-- current tool registry;
-- current session storage;
-- current message model;
-- current streaming support;
-- current approval flow, if any;
-- current logging system.
+Expected commands:
 
-Then create a focused implementation plan.
+```bash
+agent
+agent tui
+agent repl
+agent doctor
+agent run "task"
+agent plan "task"
+agent review
+```
 
-If something is missing, introduce minimal clean abstractions instead of large rewrites.
+`agent tui` is kept as an explicit alias for the default TUI path.
 
----
+## Next Implementation Phase
 
-# Desired User Experience
+Implement a minimal TUI shell behind focused CLI classes:
 
-The TUI should feel like a professional coding assistant running inside terminal.
+- app start and shutdown
+- static chat screen
+- input box
+- status bar
+- `/help`
+- `/exit`
 
-## Layout
-
-Use a simple, robust layout:
-
-```text
-┌──────────────────────────────────────────────────────────────┐
-│ EvoLoop Agent                         model: qwen / glm / api │
-├──────────────────────────────────────────────────────────────┤
-│ Conversation                                                 │
-│                                                              │
-│ User: fix broken tower defense game                          │
-│                                                              │
-│ Assistant: I will inspect the project structure first.        │
-│                                                              │
-│ ▸ tool: list_files ./                                        │
-│   result: 42 files                                           │
-│                                                              │
-│ ▸ tool: read_file Game.cs                                    │
-│   result: found broken enemy pathing                         │
-│                                                              │
-│ ▸ patch: Game.cs                                             │
-│   + fixed path update loop                                   │
-│   + added null guard                                         │
-│                                                              │
-├──────────────────────────────────────────────────────────────┤
-│ Status: waiting for input | tokens | cwd | session name       │
-├──────────────────────────────────────────────────────────────┤
-│ > /help                                                      │
-└──────────────────────────────────────────────────────────────┘
+Do not connect the TUI to the agent runtime until the minimal shell is stable.

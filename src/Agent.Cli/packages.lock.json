@@ -1,0 +1,28 @@
+{
+  "version": 2,
+  "dependencies": {
+    "net8.0": {
+      "agent.core": {
+        "type": "Project"
+      },
+      "agent.providers": {
+        "type": "Project",
+        "dependencies": {
+          "Agent.Core": "[1.0.0, )"
+        }
+      },
+      "agent.storage": {
+        "type": "Project",
+        "dependencies": {
+          "Agent.Core": "[1.0.0, )"
+        }
+      },
+      "agent.tools": {
+        "type": "Project",
+        "dependencies": {
+          "Agent.Core": "[1.0.0, )"
+        }
+      }
+    }
+  }
+}

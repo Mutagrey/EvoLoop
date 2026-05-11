@@ -1,0 +1,14 @@
+<Project>
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageVersion Include="Terminal.Gui" Version="1.19.0" />
+    <PackageVersion Include="NStack.Core" Version="1.1.1" />
+    <PackageVersion Include="System.Management" Version="9.0.4" />
+    <PackageVersion Include="System.CodeDom" Version="9.0.4" />
+    <PackageVersion Include="System.ValueTuple" Version="4.5.0" />
+  </ItemGroup>
+</Project>

@@ -1,6 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
+    <ProjectReference Include="..\..\src\Agent.Cli\Agent.Cli.csproj" />
     <ProjectReference Include="..\..\src\Agent.Core\Agent.Core.csproj" />
     <ProjectReference Include="..\..\src\Agent.Tools\Agent.Tools.csproj" />
     <ProjectReference Include="..\..\src\Agent.Providers\Agent.Providers.csproj" />

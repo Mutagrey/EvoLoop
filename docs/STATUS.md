@@ -40,6 +40,8 @@
 - Hardened symlink traversal checks for non-existing write/patch targets.
 - Tightened fallback search/path scanning around generated, storage, and binary paths.
 - Made Windows release bundle scripts regenerate `agent.cmd` wrappers.
+- Prepared the CLI-owned TUI path: bare `agent` and `agent tui` now enter a TUI placeholder, while the legacy line REPL remains available as `agent repl`.
+- Added TUI audit docs, vendored `Terminal.Gui 1.19.0` package files, and generated current project lock files for offline restore.
 
 ## Current Problems
 
@@ -48,6 +50,8 @@
 - `dotnet run --project tests/Agent.Tests/Agent.Tests.csproj` can still hang in this macOS workspace while spawning MSBuild child nodes; build the solution first and run the compiled test DLL directly as documented in `docs/TESTING.md`.
 - Snapshot diff output is currently optimized for the most recent mutation, not for a full multi-file workspace review baseline.
 - The committed Windows bundles remain intentionally tracked for now; this cleanup did not change the delivery model.
+- The TUI is not implemented yet; the current TUI path is only a prepared placeholder.
+- Vendored TUI packages are not referenced by a project yet, so the future minimal shell still needs the `Terminal.Gui` `PackageReference` and an updated package lock.
 
 ## Next Improvements
 
@@ -57,3 +61,4 @@
 - Add tests for non-writable snapshot storage, undo failure recovery, and review-mode fallback behavior.
 - Exercise native tool calling against real corporate OpenAI-compatible gateways in all supported modes.
 - Remove leftover machine-specific clutter files from version control as part of a dedicated cleanup pass.
+- Implement the minimal Terminal.Gui TUI shell and generate lock files from `vendor/nuget`.

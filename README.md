@@ -1,6 +1,6 @@
-# EvoLoop Agent CLI
+# EvoLoop Agent
 
-Windows-first autonomous coding agent CLI in pure C# with no third-party runtime dependencies.
+Windows-first autonomous coding agent in pure C# with offline-first dependency handling.
 
 The project is designed for restricted environments:
 - no admin rights on the target machine
@@ -25,7 +25,9 @@ Model tool calling:
 - JSON-ReAct fallback remains the default for compatibility
 - OpenAI-compatible native non-streaming/streaming tools are available as opt-in profile modes
 
-Console behavior:
+Terminal behavior:
+- bare `agent` enters the prepared TUI path
+- `agent repl` keeps the old line-based interactive REPL
 - ANSI-capable terminals use colored status output and live step spinner
 - plain Windows `cmd` falls back to plain ASCII output without ANSI escape noise
 
@@ -36,7 +38,7 @@ Details:
 
 ## Repository Layout
 
-- `src/Agent.Cli`: CLI entrypoint, REPL, diagnostics, startup mode selection
+- `src/Agent.Cli`: entrypoint, CLI/TUI dispatch, REPL, diagnostics, startup mode selection
 - `src/Agent.Core`: contracts, orchestration, policy, capability model
 - `src/Agent.Tools`: file, git, shell, and search tools
 - `src/Agent.Providers`: model gateway clients
@@ -59,6 +61,7 @@ Source usage on a build/developer machine:
 ```bash
 dotnet run --project src/Agent.Cli -- doctor
 dotnet run --project src/Agent.Cli -- run "inspect repository and summarize current issues"
+dotnet run --project src/Agent.Cli --
 ```
 
 If `.tooling/dotnet8` exists, the helper scripts automatically prefer that local SDK instead of a system-wide install.
@@ -112,6 +115,9 @@ This refreshes the committed bundles in:
 ## Commands
 
 CLI:
+- `agent`
+- `agent tui`
+- `agent repl`
 - `agent doctor`
 - `agent run "<task>"`
 - `agent plan "<task>"`
