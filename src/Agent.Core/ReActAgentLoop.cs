@@ -14,6 +14,8 @@ public sealed partial class ReActAgentLoop : IAgentLoop
     private readonly IContextBuilder _contextBuilder;
     private readonly IPromptBuilder _promptBuilder;
     private readonly IToolTurnExecutor _toolTurnExecutor;
+    private readonly ReActDeterministicRecovery _deterministicRecovery;
+    private readonly ReActProfileSelection _profileSelection;
 
     public ReActAgentLoop(
         IModelClientRouter modelRouter,
@@ -41,6 +43,8 @@ public sealed partial class ReActAgentLoop : IAgentLoop
         _contextBuilder = contextBuilder ?? new DefaultContextBuilder();
         _promptBuilder = promptBuilder ?? new DefaultPromptBuilder();
         _toolTurnExecutor = toolTurnExecutor ?? new DefaultToolTurnExecutor();
+        _deterministicRecovery = new ReActDeterministicRecovery(_tools);
+        _profileSelection = new ReActProfileSelection(config, _modelRouter, _contextFactory);
     }
 
     public async Task<AgentRunResult> RunAsync(AgentRunRequest request, CancellationToken ct)
@@ -56,7 +60,7 @@ public sealed partial class ReActAgentLoop : IAgentLoop
             null,
             null), ct);
 
-        var profilePlan = BuildProfilePlan(request.ProfileName);
+        var profilePlan = _profileSelection.BuildProfilePlan(request.ProfileName);
         var profileIndex = 0;
         var currentProfileName = profilePlan[profileIndex];
         var context = _contextFactory.Create(
@@ -79,7 +83,7 @@ public sealed partial class ReActAgentLoop : IAgentLoop
                 ["approval_mode"] = request.ApprovalMode.ToString()
             }), ct);
         var modelName = _modelRouter.ResolveModelName(currentProfileName);
-        var toolCallingMode = ResolveToolCallingMode(currentProfileName);
+        var toolCallingMode = _profileSelection.ResolveToolCallingMode(currentProfileName);
         var modelAdapter = _modelAdapterRouter.GetAdapter(currentProfileName, toolCallingMode);
 
         var history = (await _contextBuilder.BuildInitialMessagesAsync(request, context, _memoryStore, ct)).ToList();
@@ -91,7 +95,7 @@ public sealed partial class ReActAgentLoop : IAgentLoop
         var consecutiveFinalWithoutTools = 0;
         var lastModelIssue = string.Empty;
         var contextCompactions = 0;
-        var pathHints = new List<string>();
+        var pathHints = new ReActPathHints(request.WorkspaceRoot);
         var pendingToolTurns = new Queue<PendingToolTurn>();
 
         string finalMessage = "Agent ended without final answer.";
@@ -155,7 +159,7 @@ public sealed partial class ReActAgentLoop : IAgentLoop
                         systemPrompt += "\n\nADAPTIVE EXECUTION DIRECTIVE:\n" + adaptiveDirective;
                     }
 
-                    toolCallingMode = ResolveToolCallingMode(currentProfileName);
+                    toolCallingMode = _profileSelection.ResolveToolCallingMode(currentProfileName);
                     modelAdapter = _modelAdapterRouter.GetAdapter(currentProfileName, toolCallingMode);
                     var modelRequest = CreateModelTurnRequest(
                         currentProfileName,
@@ -205,7 +209,7 @@ public sealed partial class ReActAgentLoop : IAgentLoop
                         $"Model response format invalid at step {step}.",
                         step), ct);
 
-                    var bootstrapDecision = TryCreateBootstrapDecision(
+                    var bootstrapDecision = _deterministicRecovery.TryCreateBootstrapDecision(
                         requiresToolBeforeFinal,
                         toolStepsExecuted,
                         consecutiveInvalidResponses,
@@ -222,8 +226,8 @@ public sealed partial class ReActAgentLoop : IAgentLoop
                     }
                     else
                     {
-                        if (consecutiveInvalidResponses >= GetSwitchThreshold(_config.Runtime.InvalidResponsesBeforeProfileSwitch) &&
-                            TrySwitchProfile(profilePlan, ref profileIndex, ref currentProfileName, ref modelName, request.WorkspaceRoot, session.SessionId, request.ExecutionMode, request.ApprovalMode, ref context))
+                        if (consecutiveInvalidResponses >= ReActProfileSelection.GetSwitchThreshold(_config.Runtime.InvalidResponsesBeforeProfileSwitch) &&
+                            _profileSelection.TrySwitchProfile(profilePlan, ref profileIndex, ref currentProfileName, ref modelName, request.WorkspaceRoot, session.SessionId, request.ExecutionMode, request.ApprovalMode, ref context))
                         {
                             consecutiveInvalidResponses = 0;
                             consecutiveFinalWithoutTools = 0;
@@ -231,8 +235,7 @@ public sealed partial class ReActAgentLoop : IAgentLoop
                                 AgentRunEventType.ModelProfileSwitched,
                                 $"Switched model profile to '{currentProfileName}' after repeated invalid responses.",
                                 step), ct);
-                            history.Add(new ModelMessage("user", $"OBSERVATION: Profile switched to '{currentProfileName}'. Continue with strict JSON tool decisions."));
-                            internalHistory.Add(new UserMessage(history[^1].Content));
+                            AppendUserHistory(history, internalHistory, $"OBSERVATION: Profile switched to '{currentProfileName}'. Continue with strict JSON tool decisions.");
                             continue;
                         }
 
@@ -247,12 +250,12 @@ public sealed partial class ReActAgentLoop : IAgentLoop
                         {
                             AppendAssistantHistory(history, internalHistory, assistantMessage, modelContent);
                         }
-                        history.Add(new ModelMessage(
-                            "user",
+                        AppendUserHistory(
+                            history,
+                            internalHistory,
                             "OBSERVATION: Response format invalid. Return EXACTLY one JSON object using one of schemas: " +
                             "{\"type\":\"tool\",\"tool\":\"...\",\"reason\":\"...\",\"arguments\":{...}} " +
-                            "or {\"type\":\"final\",\"message\":\"...\"} or {\"type\":\"clarify\",\"message\":\"...\"}."));
-                        internalHistory.Add(new UserMessage(history[^1].Content));
+                            "or {\"type\":\"final\",\"message\":\"...\"} or {\"type\":\"clarify\",\"message\":\"...\"}.");
                         continue;
                     }
                 }
@@ -279,7 +282,7 @@ public sealed partial class ReActAgentLoop : IAgentLoop
                             $"Final rejected at step {step}: task requires tool actions first.",
                             step), ct);
 
-                        var deterministicBootstrap = TryCreateBootstrapDecision(
+                        var deterministicBootstrap = _deterministicRecovery.TryCreateBootstrapDecision(
                             requiresToolBeforeFinal,
                             toolStepsExecuted,
                             1,
@@ -296,8 +299,8 @@ public sealed partial class ReActAgentLoop : IAgentLoop
                         }
                         else
                         {
-                            if (consecutiveFinalWithoutTools >= GetSwitchThreshold(_config.Runtime.FinalWithoutToolsBeforeProfileSwitch) &&
-                                TrySwitchProfile(profilePlan, ref profileIndex, ref currentProfileName, ref modelName, request.WorkspaceRoot, session.SessionId, request.ExecutionMode, request.ApprovalMode, ref context))
+                            if (consecutiveFinalWithoutTools >= ReActProfileSelection.GetSwitchThreshold(_config.Runtime.FinalWithoutToolsBeforeProfileSwitch) &&
+                                _profileSelection.TrySwitchProfile(profilePlan, ref profileIndex, ref currentProfileName, ref modelName, request.WorkspaceRoot, session.SessionId, request.ExecutionMode, request.ApprovalMode, ref context))
                             {
                                 consecutiveInvalidResponses = 0;
                                 consecutiveFinalWithoutTools = 0;
@@ -305,8 +308,7 @@ public sealed partial class ReActAgentLoop : IAgentLoop
                                     AgentRunEventType.ModelProfileSwitched,
                                     $"Switched model profile to '{currentProfileName}' after repeated final-without-tools replies.",
                                     step), ct);
-                                history.Add(new ModelMessage("user", $"OBSERVATION: Profile switched to '{currentProfileName}'. You must use tools for this task."));
-                                internalHistory.Add(new UserMessage(history[^1].Content));
+                                AppendUserHistory(history, internalHistory, $"OBSERVATION: Profile switched to '{currentProfileName}'. You must use tools for this task.");
                                 continue;
                             }
 
@@ -321,10 +323,10 @@ public sealed partial class ReActAgentLoop : IAgentLoop
                             {
                                 AppendAssistantHistory(history, internalHistory, assistantMessage, modelContent);
                             }
-                            history.Add(new ModelMessage(
-                                "user",
-                                "OBSERVATION: This task requires workspace actions. Call an appropriate tool before returning final."));
-                            internalHistory.Add(new UserMessage(history[^1].Content));
+                            AppendUserHistory(
+                                history,
+                                internalHistory,
+                                "OBSERVATION: This task requires workspace actions. Call an appropriate tool before returning final.");
                             continue;
                         }
                     }
@@ -356,8 +358,8 @@ public sealed partial class ReActAgentLoop : IAgentLoop
                         $"Unknown tool '{invalidTool}' at step {step}.",
                         step), ct);
 
-                    if (consecutiveInvalidResponses >= GetSwitchThreshold(_config.Runtime.InvalidResponsesBeforeProfileSwitch) &&
-                        TrySwitchProfile(profilePlan, ref profileIndex, ref currentProfileName, ref modelName, request.WorkspaceRoot, session.SessionId, request.ExecutionMode, request.ApprovalMode, ref context))
+                    if (consecutiveInvalidResponses >= ReActProfileSelection.GetSwitchThreshold(_config.Runtime.InvalidResponsesBeforeProfileSwitch) &&
+                        _profileSelection.TrySwitchProfile(profilePlan, ref profileIndex, ref currentProfileName, ref modelName, request.WorkspaceRoot, session.SessionId, request.ExecutionMode, request.ApprovalMode, ref context))
                     {
                         consecutiveInvalidResponses = 0;
                         consecutiveFinalWithoutTools = 0;
@@ -365,8 +367,7 @@ public sealed partial class ReActAgentLoop : IAgentLoop
                             AgentRunEventType.ModelProfileSwitched,
                             $"Switched model profile to '{currentProfileName}' after repeated unknown tool decisions.",
                             step), ct);
-                        history.Add(new ModelMessage("user", $"OBSERVATION: Profile switched to '{currentProfileName}'. Use only allowed tools: {string.Join(", ", _tools.Keys.OrderBy(x => x))}."));
-                        internalHistory.Add(new UserMessage(history[^1].Content));
+                        AppendUserHistory(history, internalHistory, $"OBSERVATION: Profile switched to '{currentProfileName}'. Use only allowed tools: {string.Join(", ", _tools.Keys.OrderBy(x => x))}.");
                         continue;
                     }
 
@@ -381,8 +382,7 @@ public sealed partial class ReActAgentLoop : IAgentLoop
                     {
                         AppendAssistantHistory(history, internalHistory, assistantMessage, modelContent);
                     }
-                    history.Add(new ModelMessage("user", $"OBSERVATION: Unknown tool '{invalidTool}'. Use one of: {string.Join(", ", _tools.Keys.OrderBy(x => x))}."));
-                    internalHistory.Add(new UserMessage(history[^1].Content));
+                    AppendUserHistory(history, internalHistory, $"OBSERVATION: Unknown tool '{invalidTool}'. Use one of: {string.Join(", ", _tools.Keys.OrderBy(x => x))}.");
                     continue;
                 }
 
@@ -413,7 +413,7 @@ public sealed partial class ReActAgentLoop : IAgentLoop
                     .Select(error => error["missing_required:".Length..])
                     .ToArray();
                 if (missingRequired.Length > 0 &&
-                    TryBuildDeterministicRecoveryDecision(
+                    _deterministicRecovery.TryBuildRecoveryDecision(
                         tool.Name,
                         missingRequired,
                         decision,
@@ -449,8 +449,8 @@ public sealed partial class ReActAgentLoop : IAgentLoop
                         step,
                         tool.Name), ct);
 
-                    if (consecutiveInvalidResponses >= GetSwitchThreshold(_config.Runtime.InvalidResponsesBeforeProfileSwitch) &&
-                        TrySwitchProfile(profilePlan, ref profileIndex, ref currentProfileName, ref modelName, request.WorkspaceRoot, session.SessionId, request.ExecutionMode, request.ApprovalMode, ref context))
+                    if (consecutiveInvalidResponses >= ReActProfileSelection.GetSwitchThreshold(_config.Runtime.InvalidResponsesBeforeProfileSwitch) &&
+                        _profileSelection.TrySwitchProfile(profilePlan, ref profileIndex, ref currentProfileName, ref modelName, request.WorkspaceRoot, session.SessionId, request.ExecutionMode, request.ApprovalMode, ref context))
                     {
                         consecutiveInvalidResponses = 0;
                         consecutiveFinalWithoutTools = 0;
@@ -458,8 +458,7 @@ public sealed partial class ReActAgentLoop : IAgentLoop
                             AgentRunEventType.ModelProfileSwitched,
                             $"Switched model profile to '{currentProfileName}' after repeated argument-validation failures.",
                             step), ct);
-                        history.Add(new ModelMessage("user", $"OBSERVATION: Profile switched to '{currentProfileName}'. Tool '{tool.Name}' validation failed: {missing}."));
-                        internalHistory.Add(new UserMessage(history[^1].Content));
+                        AppendUserHistory(history, internalHistory, $"OBSERVATION: Profile switched to '{currentProfileName}'. Tool '{tool.Name}' validation failed: {missing}.");
                         continue;
                     }
 
@@ -475,11 +474,11 @@ public sealed partial class ReActAgentLoop : IAgentLoop
                     {
                         AppendAssistantHistory(history, internalHistory, assistantMessage, modelContent);
                     }
-                    history.Add(new ModelMessage(
-                        "user",
+                    AppendUserHistory(
+                        history,
+                        internalHistory,
                         $"OBSERVATION: Tool '{tool.Name}' call is invalid. Validation errors: {missing}. " +
-                        $"Return STRICT JSON tool call and include required fields: {requiredHint}."));
-                    internalHistory.Add(new UserMessage(history[^1].Content));
+                        $"Return STRICT JSON tool call and include required fields: {requiredHint}.");
                     continue;
                 }
 
@@ -533,22 +532,20 @@ public sealed partial class ReActAgentLoop : IAgentLoop
                     step,
                     tool.Name), ct);
 
-                CapturePathHints(pathHints, request.WorkspaceRoot, tool.Name, decision.Arguments, result);
+                pathHints.Capture(tool.Name, decision.Arguments, result);
                 trace.Add(turnResult.Step!);
                 toolStepsExecuted++;
                 lastModelIssue = result.Success ? string.Empty : $"tool_failed:{tool.Name}";
                 var observation = BuildObservationMessage(tool.Name, result, _config.Runtime.ObservationMaxChars);
                 var toolResultMessage = CreateToolResultMessage(decision, result, _config.Runtime.ObservationMaxChars);
-                if (IsNativeToolMode(modelResult.ToolCallingMode))
-                {
-                    history.Add(new ModelMessage("tool", toolResultMessage.ToObservationText(_config.Runtime.ObservationMaxChars), decision.ToolCallId, tool.Name));
-                }
-                else
-                {
-                    history.Add(new ModelMessage("user", observation));
-                }
-
-                internalHistory.Add(toolResultMessage);
+                AppendToolResultHistory(
+                    history,
+                    internalHistory,
+                    decision,
+                    toolResultMessage,
+                    modelResult.ToolCallingMode,
+                    observation,
+                    _config.Runtime.ObservationMaxChars);
             }
 
             if (!success && finalMessage == "Agent ended without final answer.")

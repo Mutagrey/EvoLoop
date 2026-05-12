@@ -1,88 +1,72 @@
-using System.Text.RegularExpressions;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace Agent.Core;
 
-public sealed partial class ReActAgentLoop
+internal sealed class ReActPathHints
 {
-    private static void CapturePathHints(
-        List<string> pathHints,
-        string workspaceRoot,
-        string toolName,
-        JsonElement arguments,
-        ToolResult result)
+    private readonly string _workspaceRoot;
+    private readonly List<string> _pathHints = new();
+
+    public ReActPathHints(string workspaceRoot)
+    {
+        _workspaceRoot = workspaceRoot;
+    }
+
+    public void Capture(string toolName, JsonElement arguments, ToolResult result)
     {
         var path = ToolArgumentReader.GetString(arguments, "path");
         var allowMissingPath = toolName.Equals("fs_write", StringComparison.OrdinalIgnoreCase) ||
                                toolName.Equals("fs_patch", StringComparison.OrdinalIgnoreCase);
-        TrackPathHint(pathHints, workspaceRoot, path, allowMissingPath);
+        Track(path, allowMissingPath);
 
         var pathspec = ToolArgumentReader.GetString(arguments, "pathspec");
-        TrackPathHint(pathHints, workspaceRoot, pathspec, true);
+        Track(pathspec, true);
 
-        if (!string.IsNullOrWhiteSpace(result.StdOut))
+        if (string.IsNullOrWhiteSpace(result.StdOut))
         {
-            var lines = result.StdOut.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
-            foreach (var line in lines.Take(100))
+            return;
+        }
+
+        var lines = result.StdOut.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+        foreach (var line in lines.Take(100))
+        {
+            if ((toolName.Equals("search_lexical", StringComparison.OrdinalIgnoreCase) ||
+                 toolName.Equals("search_semantic", StringComparison.OrdinalIgnoreCase)) &&
+                TryExtractSearchHitPath(line, out var searchPath))
             {
-                if ((toolName.Equals("search_lexical", StringComparison.OrdinalIgnoreCase) ||
-                     toolName.Equals("search_semantic", StringComparison.OrdinalIgnoreCase)) &&
-                    TryExtractSearchHitPath(line, out var searchPath))
-                {
-                    TrackPathHint(pathHints, workspaceRoot, searchPath, false);
-                    continue;
-                }
+                Track(searchPath, false);
+                continue;
+            }
 
-                if (toolName.Equals("fs_list", StringComparison.OrdinalIgnoreCase))
+            if (toolName.Equals("fs_list", StringComparison.OrdinalIgnoreCase))
+            {
+                if (line.StartsWith("[FILE] ", StringComparison.OrdinalIgnoreCase) ||
+                    line.StartsWith("[DIR] ", StringComparison.OrdinalIgnoreCase))
                 {
-                    if (line.StartsWith("[FILE] ", StringComparison.OrdinalIgnoreCase) ||
-                        line.StartsWith("[DIR] ", StringComparison.OrdinalIgnoreCase))
+                    var candidate = line.StartsWith("[FILE] ", StringComparison.OrdinalIgnoreCase)
+                        ? line["[FILE] ".Length..].Trim()
+                        : line["[DIR] ".Length..].Trim();
+                    var markerIndex = candidate.IndexOf(" (", StringComparison.Ordinal);
+                    if (markerIndex > 0)
                     {
-                        var candidate = line.StartsWith("[FILE] ", StringComparison.OrdinalIgnoreCase)
-                            ? line["[FILE] ".Length..].Trim()
-                            : line["[DIR] ".Length..].Trim();
-                        var markerIndex = candidate.IndexOf(" (", StringComparison.Ordinal);
-                        if (markerIndex > 0)
-                        {
-                            candidate = candidate[..markerIndex];
-                        }
-
-                        TrackPathHint(pathHints, workspaceRoot, candidate, false);
+                        candidate = candidate[..markerIndex];
                     }
-                }
 
-                if (TryExtractGenericPathFromLine(line, out var genericPath))
-                {
-                    TrackPathHint(pathHints, workspaceRoot, genericPath, true);
+                    Track(candidate, false);
                 }
+            }
+
+            if (TryExtractGenericPathFromLine(line, out var genericPath))
+            {
+                Track(genericPath, true);
             }
         }
     }
 
-    private static void TrackPathHint(List<string> pathHints, string workspaceRoot, string? rawPath, bool allowNonExisting)
-    {
-        if (!TryNormalizePathCandidate(workspaceRoot, rawPath, allowNonExisting, preferFile: false, out var normalized))
-        {
-            return;
-        }
-
-        if (pathHints.Any(existing => existing.Equals(normalized, StringComparison.OrdinalIgnoreCase)))
-        {
-            return;
-        }
-
-        pathHints.Add(normalized);
-        if (pathHints.Count > 64)
-        {
-            pathHints.RemoveAt(0);
-        }
-    }
-
-    private static bool TryInferPathFromContext(
+    public bool TryInferPathFromContext(
         string task,
         string reason,
-        string workspaceRoot,
-        IReadOnlyList<string> pathHints,
         bool allowNonExisting,
         bool preferFile,
         out string path)
@@ -91,16 +75,16 @@ public sealed partial class ReActAgentLoop
         {
             foreach (var candidate in ExtractPathCandidatesFromText(text))
             {
-                if (TryNormalizePathCandidate(workspaceRoot, candidate, allowNonExisting, preferFile, out path))
+                if (TryNormalizePathCandidate(_workspaceRoot, candidate, allowNonExisting, preferFile, out path))
                 {
                     return true;
                 }
             }
         }
 
-        for (var i = pathHints.Count - 1; i >= 0; i--)
+        for (var i = _pathHints.Count - 1; i >= 0; i--)
         {
-            if (TryNormalizePathCandidate(workspaceRoot, pathHints[i], allowNonExisting, preferFile, out path))
+            if (TryNormalizePathCandidate(_workspaceRoot, _pathHints[i], allowNonExisting, preferFile, out path))
             {
                 return true;
             }
@@ -111,7 +95,7 @@ public sealed partial class ReActAgentLoop
             foreach (Match match in Regex.Matches(text ?? string.Empty, @"\b([A-Za-z0-9_\-]+\.[A-Za-z0-9_]{1,12})\b"))
             {
                 var fileName = match.Groups[1].Value;
-                if (TryFindUniqueFileByName(workspaceRoot, fileName, out path))
+                if (TryFindUniqueFileByName(fileName, out path))
                 {
                     return true;
                 }
@@ -122,34 +106,7 @@ public sealed partial class ReActAgentLoop
         return false;
     }
 
-    private static IEnumerable<string> ExtractPathCandidatesFromText(string? text)
-    {
-        if (string.IsNullOrWhiteSpace(text))
-        {
-            yield break;
-        }
-
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (Match match in Regex.Matches(text, "[`\"'](?<path>[^`\"'\\r\\n]{1,260})[`\"']"))
-        {
-            var candidate = match.Groups["path"].Value;
-            if (seen.Add(candidate))
-            {
-                yield return candidate;
-            }
-        }
-
-        foreach (Match match in Regex.Matches(text, @"(?<![\w/\\])(?<path>[A-Za-z0-9_\-./\\]{2,260}\.[A-Za-z0-9_\-]{1,12})(?![\w/\\])"))
-        {
-            var candidate = match.Groups["path"].Value;
-            if (seen.Add(candidate))
-            {
-                yield return candidate;
-            }
-        }
-    }
-
-    private static bool TryNormalizePathCandidate(
+    internal static bool TryNormalizePathCandidate(
         string workspaceRoot,
         string? rawCandidate,
         bool allowNonExisting,
@@ -234,7 +191,53 @@ public sealed partial class ReActAgentLoop
         return true;
     }
 
-    private static bool TryFindUniqueFileByName(string workspaceRoot, string fileName, out string path)
+    private void Track(string? rawPath, bool allowNonExisting)
+    {
+        if (!TryNormalizePathCandidate(_workspaceRoot, rawPath, allowNonExisting, preferFile: false, out var normalized))
+        {
+            return;
+        }
+
+        if (_pathHints.Any(existing => existing.Equals(normalized, StringComparison.OrdinalIgnoreCase)))
+        {
+            return;
+        }
+
+        _pathHints.Add(normalized);
+        if (_pathHints.Count > 64)
+        {
+            _pathHints.RemoveAt(0);
+        }
+    }
+
+    private static IEnumerable<string> ExtractPathCandidatesFromText(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            yield break;
+        }
+
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (Match match in Regex.Matches(text, "[`\"'](?<path>[^`\"'\\r\\n]{1,260})[`\"']"))
+        {
+            var candidate = match.Groups["path"].Value;
+            if (seen.Add(candidate))
+            {
+                yield return candidate;
+            }
+        }
+
+        foreach (Match match in Regex.Matches(text, @"(?<![\w/\\])(?<path>[A-Za-z0-9_\-./\\]{2,260}\.[A-Za-z0-9_\-]{1,12})(?![\w/\\])"))
+        {
+            var candidate = match.Groups["path"].Value;
+            if (seen.Add(candidate))
+            {
+                yield return candidate;
+            }
+        }
+    }
+
+    private bool TryFindUniqueFileByName(string fileName, out string path)
     {
         path = string.Empty;
         if (string.IsNullOrWhiteSpace(fileName))
@@ -243,14 +246,14 @@ public sealed partial class ReActAgentLoop
         }
 
         string? match = null;
-        foreach (var file in EnumeratePathHintFiles(workspaceRoot))
+        foreach (var file in EnumeratePathHintFiles())
         {
             if (!Path.GetFileName(file).Equals(fileName, StringComparison.OrdinalIgnoreCase))
             {
                 continue;
             }
 
-            var relative = Path.GetRelativePath(workspaceRoot, file).Replace('\\', '/');
+            var relative = Path.GetRelativePath(_workspaceRoot, file).Replace('\\', '/');
             if (ShouldSkipPathScan(relative))
             {
                 continue;
@@ -285,10 +288,10 @@ public sealed partial class ReActAgentLoop
                IsBinaryPath(rel);
     }
 
-    private static IEnumerable<string> EnumeratePathHintFiles(string workspaceRoot)
+    private IEnumerable<string> EnumeratePathHintFiles()
     {
         var pending = new Stack<string>();
-        pending.Push(workspaceRoot);
+        pending.Push(_workspaceRoot);
 
         while (pending.Count > 0)
         {
@@ -306,7 +309,7 @@ public sealed partial class ReActAgentLoop
 
             foreach (var child in directories)
             {
-                var relative = Path.GetRelativePath(workspaceRoot, child).Replace('\\', '/');
+                var relative = Path.GetRelativePath(_workspaceRoot, child).Replace('\\', '/');
                 if (!ShouldSkipPathScan(relative + "/"))
                 {
                     pending.Push(child);
@@ -325,7 +328,7 @@ public sealed partial class ReActAgentLoop
 
             foreach (var file in files)
             {
-                var relative = Path.GetRelativePath(workspaceRoot, file).Replace('\\', '/');
+                var relative = Path.GetRelativePath(_workspaceRoot, file).Replace('\\', '/');
                 if (!ShouldSkipPathScan(relative))
                 {
                     yield return file;
@@ -423,5 +426,4 @@ public sealed partial class ReActAgentLoop
 
         return false;
     }
-
 }

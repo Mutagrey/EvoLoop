@@ -51,6 +51,10 @@
 - Completed Phase 2 contract cleanup: split `AgentContracts.cs` into focused runtime, tool, model, storage/event, config, and null implementation files without public type or behavior changes.
 - Started Phase 3 runtime separation by moving normal and fatal session completion paths from `ReActAgentLoop.RunAsync` into focused lifecycle helpers, preserving step-loop termination logic.
 - Added explicit ReAct termination tests for clarify responses, max-step exhaustion, and repeated final-without-tools replies.
+- Moved deterministic ReAct recovery/bootstrap decisions into a focused runtime collaborator while preserving loop behavior.
+- Moved ReAct path-hint capture, inference, normalization, and scan rules into a focused runtime collaborator.
+- Moved ReAct profile selection, model limits, tool-calling mode lookup, and switch-threshold handling into a focused runtime collaborator.
+- Completed Phase 3 runtime separation with centralized normalized message-history append helpers for user, assistant, and tool-result turns.
 
 ## Current Problems
 

@@ -110,6 +110,40 @@ public sealed partial class ReActAgentLoop
         internalHistory.Add(assistant);
     }
 
+    private static void AppendUserHistory(
+        List<ModelMessage> history,
+        List<InternalMessage> internalHistory,
+        string content)
+    {
+        history.Add(new ModelMessage("user", content));
+        internalHistory.Add(new UserMessage(content));
+    }
+
+    private static void AppendToolResultHistory(
+        List<ModelMessage> history,
+        List<InternalMessage> internalHistory,
+        AgentDecision decision,
+        ToolResultMessage toolResultMessage,
+        ToolCallingMode toolCallingMode,
+        string legacyObservation,
+        int maxChars)
+    {
+        if (IsNativeToolMode(toolCallingMode))
+        {
+            history.Add(new ModelMessage(
+                "tool",
+                toolResultMessage.ToObservationText(maxChars),
+                decision.ToolCallId,
+                decision.ToolName));
+        }
+        else
+        {
+            history.Add(new ModelMessage("user", legacyObservation));
+        }
+
+        internalHistory.Add(toolResultMessage);
+    }
+
     private static ToolResultMessage CreateToolResultMessage(AgentDecision decision, ToolResult result, int maxChars)
     {
         var call = new ToolCallBlock(

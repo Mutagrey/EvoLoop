@@ -1,5 +1,3 @@
-using System.Text.Json;
-
 namespace Agent.Core;
 
 public sealed partial class ReActAgentLoop
@@ -9,7 +7,7 @@ public sealed partial class ReActAgentLoop
         AgentDecision decision,
         string task,
         string workspaceRoot,
-        IReadOnlyList<string> pathHints,
+        ReActPathHints pathHints,
         string rawModelOutput,
         out AgentDecision repaired,
         out string repairNote)
@@ -42,7 +40,7 @@ public sealed partial class ReActAgentLoop
             {
                 updates["path"] = rawPath;
             }
-            else if (TryInferPathFromContext(task, decision.Reason, workspaceRoot, pathHints, allowNonExistingPath, preferFilePath, out var inferredPath))
+            else if (pathHints.TryInferPathFromContext(task, decision.Reason, allowNonExistingPath, preferFilePath, out var inferredPath))
             {
                 updates["path"] = inferredPath;
             }
@@ -125,7 +123,7 @@ public sealed partial class ReActAgentLoop
             }
             else
             {
-                updates["query"] = BuildSeedSearchQuery(task);
+                updates["query"] = ReActRecoveryHelpers.BuildSeedSearchQuery(task);
             }
         }
 
@@ -143,30 +141,9 @@ public sealed partial class ReActAgentLoop
             return false;
         }
 
-        var merged = MergeArguments(decision.Arguments, updates);
+        var merged = ReActRecoveryHelpers.MergeArguments(decision.Arguments, updates);
         repaired = decision with { Arguments = merged };
         repairNote = $"Auto-repaired arguments for '{toolName}': {string.Join(", ", updates.Keys)}.";
         return true;
-    }
-
-    private static JsonElement MergeArguments(JsonElement source, IReadOnlyDictionary<string, object?> updates)
-    {
-        var map = new Dictionary<string, JsonElement>(StringComparer.OrdinalIgnoreCase);
-        if (source.ValueKind == JsonValueKind.Object)
-        {
-            foreach (var property in source.EnumerateObject())
-            {
-                map[property.Name] = property.Value.Clone();
-            }
-        }
-
-        foreach (var update in updates)
-        {
-            map[update.Key] = JsonSerializer.SerializeToElement(update.Value);
-        }
-
-        var json = JsonSerializer.Serialize(map);
-        using var doc = JsonDocument.Parse(json);
-        return doc.RootElement.Clone();
     }
 }

@@ -20,8 +20,8 @@ public sealed partial class ReActAgentLoop
             internalHistory,
             _tools.Values.ToList(),
             toolCallingMode,
-            GetTemperature(profileName),
-            GetMaxTokens(profileName),
+            _profileSelection.GetTemperature(profileName),
+            _profileSelection.GetMaxTokens(profileName),
             new Dictionary<string, string>
             {
                 ["session_id"] = sessionId,

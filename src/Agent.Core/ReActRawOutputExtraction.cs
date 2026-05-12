@@ -16,14 +16,14 @@ public sealed partial class ReActAgentLoop
         if (TryExtractNamedScalarValue(rawModelOutput,
             new[] { "path", "file", "file_path", "filepath", "filename", "target_path", "relative_path", "pathspec" },
             out var byKey) &&
-            TryNormalizePathCandidate(workspaceRoot, byKey, allowNonExisting, preferFile, out path))
+            ReActPathHints.TryNormalizePathCandidate(workspaceRoot, byKey, allowNonExisting, preferFile, out path))
         {
             return true;
         }
 
         var patchFile = Regex.Match(rawModelOutput, @"(?im)^\*\*\*\s+(?:Add|Update|Delete)\s+File:\s*(?<path>.+)$");
         if (patchFile.Success &&
-            TryNormalizePathCandidate(workspaceRoot, patchFile.Groups["path"].Value, allowNonExisting, preferFile, out path))
+            ReActPathHints.TryNormalizePathCandidate(workspaceRoot, patchFile.Groups["path"].Value, allowNonExisting, preferFile, out path))
         {
             return true;
         }
@@ -37,7 +37,7 @@ public sealed partial class ReActAgentLoop
                 continue;
             }
 
-            if (TryNormalizePathCandidate(workspaceRoot, candidate, allowNonExisting, preferFile, out path))
+            if (ReActPathHints.TryNormalizePathCandidate(workspaceRoot, candidate, allowNonExisting, preferFile, out path))
             {
                 return true;
             }
@@ -51,7 +51,7 @@ public sealed partial class ReActAgentLoop
                 continue;
             }
 
-            if (TryNormalizePathCandidate(workspaceRoot, candidate, allowNonExisting, preferFile, out path))
+            if (ReActPathHints.TryNormalizePathCandidate(workspaceRoot, candidate, allowNonExisting, preferFile, out path))
             {
                 return true;
             }
@@ -65,7 +65,7 @@ public sealed partial class ReActAgentLoop
                 continue;
             }
 
-            if (TryNormalizePathCandidate(workspaceRoot, candidate, allowNonExisting, preferFile, out path))
+            if (ReActPathHints.TryNormalizePathCandidate(workspaceRoot, candidate, allowNonExisting, preferFile, out path))
             {
                 return true;
             }
@@ -93,7 +93,7 @@ public sealed partial class ReActAgentLoop
         return false;
     }
 
-    private static bool TryExtractCommandFromRawOutput(string rawModelOutput, out string command)
+    internal static bool TryExtractCommandFromRawOutput(string rawModelOutput, out string command)
     {
         command = string.Empty;
         if (TryExtractNamedScalarValue(rawModelOutput, new[] { "command", "cmd", "shell", "script" }, out var byKey))
@@ -127,7 +127,7 @@ public sealed partial class ReActAgentLoop
         return false;
     }
 
-    private static bool TryExtractCommitMessage(string rawModelOutput, string task, out string message)
+    internal static bool TryExtractCommitMessage(string rawModelOutput, string task, out string message)
     {
         message = string.Empty;
         if (TryExtractNamedScalarValue(rawModelOutput, new[] { "message", "msg", "commit_message" }, out var byKey))
