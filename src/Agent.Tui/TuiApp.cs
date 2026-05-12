@@ -1,4 +1,5 @@
 using Agent.Core;
+using Agent.Hosting;
 
 namespace Agent.Tui;
 
@@ -7,6 +8,10 @@ internal sealed class TuiApp
     private readonly object _sync = new();
     private readonly List<TuiMessage> _messages = new();
     private string _activity = "idle";
+    private AgentTaskRunner? _taskRunner;
+    private AgentRunResult? _lastRun;
+    private AgentRunResult? _lastPlan;
+    private bool _taskRunning;
 
     public TuiApp(TuiRuntimeInfo runtime, SlashCommandRegistry commands)
     {
@@ -17,6 +22,7 @@ internal sealed class TuiApp
 
     public TuiRuntimeInfo Runtime { get; }
     public SlashCommandRegistry Commands { get; }
+    public event Action? Changed;
     public IReadOnlyList<TuiMessage> Messages
     {
         get
@@ -52,7 +58,17 @@ internal sealed class TuiApp
         }
     }
 
+    public void AttachTaskRunner(AgentTaskRunner taskRunner)
+    {
+        _taskRunner = taskRunner;
+    }
+
     public TuiCommandResult Submit(string input)
+    {
+        return SubmitAsync(input, CancellationToken.None).GetAwaiter().GetResult();
+    }
+
+    public async Task<TuiCommandResult> SubmitAsync(string input, CancellationToken ct)
     {
         var text = input.Trim();
         if (string.IsNullOrWhiteSpace(text))
@@ -61,6 +77,29 @@ internal sealed class TuiApp
         }
 
         AddMessage(TuiMessage.User(text));
+
+        if (TryParseTaskInput(text, Runtime.ApprovalMode, out var task, out var executionMode, out var approvalMode))
+        {
+            return await RunTaskAsync(task, executionMode, approvalMode, ct);
+        }
+
+        if (text.Equals("/plan", StringComparison.OrdinalIgnoreCase))
+        {
+            var message = _lastPlan is null
+                ? "No plan has been generated yet."
+                : _lastPlan.FinalMessage;
+            AddMessage(_lastPlan is null ? TuiMessage.Status(message) : TuiMessage.Assistant(message));
+            return new TuiCommandResult(true, false, false, message);
+        }
+
+        if (text.Equals("/status", StringComparison.OrdinalIgnoreCase))
+        {
+            var message = _lastRun is null
+                ? "No task executed yet."
+                : $"Session: {_lastRun.SessionId}; success={_lastRun.Success}; steps={_lastRun.Steps}";
+            AddStatus(message);
+            return new TuiCommandResult(true, false, false, message);
+        }
 
         if (text.StartsWith("/", StringComparison.Ordinal))
         {
@@ -74,9 +113,7 @@ internal sealed class TuiApp
             return result;
         }
 
-        const string pending = "Agent integration pending. Minimal TUI shell only; use Agent.Cli for run, plan, review, or repl.";
-        AddMessage(TuiMessage.System(pending));
-        return new TuiCommandResult(true, false, false, pending);
+        return await RunTaskAsync(text, AgentExecutionMode.Run, Runtime.ApprovalMode, ct);
     }
 
     public void RecordRuntimeEvent(AgentRunEvent evt)
@@ -94,6 +131,8 @@ internal sealed class TuiApp
                 _ => TuiMessage.Status(text)
             });
         }
+
+        Changed?.Invoke();
     }
 
     public void RecordApprovalRequest(ApprovalRequest request)
@@ -104,6 +143,8 @@ internal sealed class TuiApp
             _activity = message;
             _messages.Add(TuiMessage.Status(message));
         }
+
+        Changed?.Invoke();
     }
 
     public void RecordApprovalResult(string toolName, bool approved)
@@ -114,11 +155,13 @@ internal sealed class TuiApp
             _activity = message;
             _messages.Add(TuiMessage.Status(message));
         }
+
+        Changed?.Invoke();
     }
 
     private void AddStartupMessages()
     {
-        AddMessage(TuiMessage.System("Minimal TUI shell ready. Type /help for commands or /exit to quit."));
+        AddMessage(TuiMessage.System("TUI shell ready. Type a task, /plan <task>, /review [focus], /status, /help, or /exit."));
         AddStatus($"Workspace: {Runtime.Workspace}");
         AddStatus($"Profile: {Runtime.Profile}; runtime mode: {Runtime.ModeLabel}");
 
@@ -154,6 +197,8 @@ internal sealed class TuiApp
         {
             _messages.Add(message);
         }
+
+        Changed?.Invoke();
     }
 
     private static string FormatRuntimeEvent(AgentRunEvent evt)
@@ -161,5 +206,109 @@ internal sealed class TuiApp
         var prefix = evt.Step.HasValue ? $"step {evt.Step.Value}: " : string.Empty;
         var tool = string.IsNullOrWhiteSpace(evt.ToolName) ? string.Empty : $" [{evt.ToolName}]";
         return $"{prefix}{evt.Type}{tool}: {evt.Message}";
+    }
+
+    private async Task<TuiCommandResult> RunTaskAsync(
+        string task,
+        AgentExecutionMode executionMode,
+        ApprovalPolicyMode approvalMode,
+        CancellationToken ct)
+    {
+        if (_taskRunner is null)
+        {
+            const string notReady = "Agent runtime is not attached.";
+            AddMessage(TuiMessage.Error(notReady));
+            return new TuiCommandResult(false, false, true, notReady);
+        }
+
+        var busy = false;
+        lock (_sync)
+        {
+            if (_taskRunning)
+            {
+                busy = true;
+            }
+            else
+            {
+                _taskRunning = true;
+                _activity = executionMode == AgentExecutionMode.Plan ? "planning" : executionMode == AgentExecutionMode.Review ? "reviewing" : "running";
+                _messages.Add(TuiMessage.Status($"{_activity}: {task}"));
+            }
+        }
+
+        if (busy)
+        {
+            const string message = "A task is already running.";
+            AddMessage(TuiMessage.Error(message));
+            return new TuiCommandResult(false, false, true, message);
+        }
+
+        Changed?.Invoke();
+
+        try
+        {
+            var observer = new TuiRuntimeObserver(this);
+            var outcome = await _taskRunner.RunAsync(task, Runtime.Profile, executionMode, approvalMode, observer, ct);
+            var result = outcome.Result;
+            if (executionMode == AgentExecutionMode.Plan)
+            {
+                _lastPlan = result;
+            }
+            else
+            {
+                _lastRun = result;
+            }
+
+            var body = outcome.LocalReviewSummary ?? $"Session: {result.SessionId}\nSteps: {result.Steps}\n\n{result.FinalMessage}";
+            AddMessage(result.Success ? TuiMessage.Assistant(body) : TuiMessage.Error(body));
+            return new TuiCommandResult(true, false, !result.Success, result.FinalMessage);
+        }
+        finally
+        {
+            lock (_sync)
+            {
+                _taskRunning = false;
+                _activity = "idle";
+            }
+
+            Changed?.Invoke();
+        }
+    }
+
+    private static bool TryParseTaskInput(
+        string text,
+        ApprovalPolicyMode defaultApprovalMode,
+        out string task,
+        out AgentExecutionMode executionMode,
+        out ApprovalPolicyMode approvalMode)
+    {
+        task = string.Empty;
+        executionMode = AgentExecutionMode.Run;
+        approvalMode = defaultApprovalMode;
+
+        if (text.StartsWith("/task ", StringComparison.OrdinalIgnoreCase))
+        {
+            task = text[6..].Trim();
+            return !string.IsNullOrWhiteSpace(task);
+        }
+
+        if (text.StartsWith("/plan ", StringComparison.OrdinalIgnoreCase))
+        {
+            task = text[6..].Trim();
+            executionMode = AgentExecutionMode.Plan;
+            approvalMode = ApprovalPolicyMode.ReadOnly;
+            return !string.IsNullOrWhiteSpace(task);
+        }
+
+        if (text.StartsWith("/review", StringComparison.OrdinalIgnoreCase))
+        {
+            var suffix = text.Length > 7 ? text[7..].Trim() : null;
+            task = AgentTaskRunner.BuildReviewTask(suffix);
+            executionMode = AgentExecutionMode.Review;
+            approvalMode = ApprovalPolicyMode.ReadOnly;
+            return true;
+        }
+
+        return false;
     }
 }

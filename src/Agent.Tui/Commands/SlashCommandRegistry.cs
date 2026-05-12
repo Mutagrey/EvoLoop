@@ -86,8 +86,8 @@ internal sealed class SlashCommandRegistry
         }
 
         sb.AppendLine();
-        sb.AppendLine("Minimal TUI shell only: agent integration pending.");
-        sb.AppendLine("Use Agent.Cli for model-backed run, plan, review, and repl commands.");
+        sb.AppendLine("Task input runs through the shared agent runtime.");
+        sb.AppendLine("Use /status, /plan <task>, /review [focus], or plain text for run mode.");
         return sb.ToString().TrimEnd();
     }
 }

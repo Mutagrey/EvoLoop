@@ -63,6 +63,7 @@ Ordered refactor work follows `docs/architecture/refactor-plan.md`; this file re
 - Completed Phase 7 storage/session cleanup: split canonical JSONL stores from the SQLite projection, centralized event type names, and documented JSONL as the source for future session-tree views.
 - Started Phase 8 UI/TUI boundary cleanup by moving local degraded review fallback into `Agent.Hosting` while keeping rendering in CLI/TUI-specific layers.
 - Completed Phase 8 UI/TUI boundary cleanup by adding TUI-local runtime observer and approval adapters without making `Agent.Tui` depend on `Agent.Cli` or moving Terminal.Gui types outside TUI.
+- Connected `Agent.Tui` input to `AgentTaskRunner`: plain text runs `run`, `/plan <task>` runs read-only plan mode, and `/review [focus]` runs review mode through the shared hosting/runtime path.
 
 ## Current Problems
 
@@ -71,7 +72,7 @@ Ordered refactor work follows `docs/architecture/refactor-plan.md`; this file re
 - `dotnet run --project tests/Agent.Tests/Agent.Tests.csproj` can still hang in this macOS workspace while spawning MSBuild child nodes; build the solution first and run the compiled test DLL directly as documented in `docs/TESTING.md`.
 - Snapshot diff output is currently optimized for the most recent mutation, not for a full multi-file workspace review baseline.
 - The checked-in Windows release bundle binaries are stale CLI-only snapshots and have not been regenerated for the new `Agent.Tui` executable yet.
-- The TUI shell is not connected to agent execution yet; normal input records a pending-integration message.
+- TUI approval requests are recorded and rejected by default until an interactive approval prompt is added.
 
 ## Next Improvements
 
@@ -81,4 +82,4 @@ Ordered refactor work follows `docs/architecture/refactor-plan.md`; this file re
 - Add tests for non-writable snapshot storage, undo failure recovery, and review-mode fallback behavior.
 - Exercise native tool calling against real corporate OpenAI-compatible gateways in all supported modes.
 - Regenerate or smoke-test the tracked Windows bundles before using `release/windows` as a TUI-capable release.
-- Connect `Agent.Tui` input to the existing agent runtime event flow using the TUI-local observer and approval adapters.
+- Add an interactive TUI approval prompt and richer tool activity rendering.

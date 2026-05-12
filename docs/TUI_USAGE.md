@@ -1,6 +1,6 @@
 # TUI Usage
 
-Start the minimal TUI shell:
+Start the TUI shell:
 
 ```bash
 dotnet run --project src/Agent.Tui --
@@ -33,15 +33,16 @@ Available themes:
 
 ## Commands
 
-- `/help`: show available TUI commands and current limitations.
+- `/help`: show available TUI commands.
+- `/status`: show the last task status.
+- `/plan <task>`: run read-only plan mode.
+- `/review [focus]`: review current workspace changes.
 - `/exit`: close the TUI.
 
-Normal text is recorded as a user message and returns `Agent integration pending`. Model-backed work still uses `Agent.Cli` for now:
+Normal text runs through the shared agent runtime in `run` mode. Model-backed `run` and `plan` still require a configured model gateway; `review` can use the local degraded fallback when model execution is unavailable.
 
 ```bash
-dotnet run --project src/Agent.Cli -- run "task"
-dotnet run --project src/Agent.Cli -- plan "task"
-dotnet run --project src/Agent.Cli -- review
+dotnet run --project src/Agent.Tui --
 ```
 
 ## Keyboard
@@ -52,5 +53,5 @@ dotnet run --project src/Agent.Cli -- review
 
 ## Known Limitations
 
-- No agent runtime integration yet.
-- No streaming output, tool activity rendering, approval dialog, diff view, session list, or slash suggestion popup yet.
+- Approval requests are recorded and rejected by default until an interactive TUI approval prompt is added.
+- No diff view, session list, or slash suggestion popup yet.

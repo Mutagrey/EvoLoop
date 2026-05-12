@@ -102,16 +102,17 @@ Reason:
 
 ## ADR-0008: TUI Integration Comes After Runtime Event Cleanup
 
-Status: accepted
+Status: accepted, implemented
 
 Decision:
 
-- Keep the current minimal TUI shell pending integration.
-- Connect TUI to agent execution only after application/runtime boundaries and structured event data are stable.
+- Keep TUI-specific rendering, observer, and approval handling inside `Agent.Tui`.
+- Connect TUI to agent execution through `Agent.Hosting` and structured `AgentRunEvent` data.
 
 Reason:
 
-- `SpinnerObserver` currently derives activity by parsing text. TUI should consume structured events instead of depending on CLI renderer behavior.
+- TUI should consume structured events instead of depending on CLI renderer behavior.
+- Core, Tools, Providers, and Storage should not depend on Terminal.Gui types.
 
 ## ADR-0009: Keep Tracked Windows Bundles For Now
 

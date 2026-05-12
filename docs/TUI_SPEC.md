@@ -17,10 +17,11 @@ Implemented:
 - add packaged `agent-cli.cmd` as the pure CLI wrapper
 - keep the old line REPL in `Agent.Cli`
 - vendor the TUI dependency packages for offline restore
-- minimal Terminal.Gui shell with static chat transcript, input line, status bar, `/help`, and `/exit`
+- Terminal.Gui shell with transcript, input line, status bar, `/help`, `/status`, `/plan`, `/review`, and `/exit`
 - theme layer with `claude-dark` and `mono`
+- TUI-local runtime observer and approval adapter connected to the shared `Agent.Hosting` runtime path
 
-The current TUI shell does not run agent tasks yet. Normal input is recorded in the transcript and returns an explicit "agent integration pending" status message.
+Normal text runs through the shared agent runtime in `run` mode. `/plan <task>` runs in read-only plan mode. `/review [focus]` runs review mode and can use the local degraded review fallback when model execution is unavailable.
 
 ## Dependency Policy
 
@@ -52,10 +53,13 @@ Packaged Windows wrappers should map `agent.cmd` to `Agent.Tui.exe` and `agent-c
 The minimal shell supports:
 
 - app start and shutdown
-- static chat screen
+- chat transcript
 - input box
 - status bar
 - `/help`
+- `/status`
+- `/plan <task>`
+- `/review [focus]`
 - `/exit`
 - `Ctrl+C` shutdown
 - `Ctrl+D` shutdown when input is empty
@@ -66,4 +70,4 @@ Default styling is a dark terminal palette: black background, gray text, muted c
 
 ## Next Implementation Phase
 
-Connect the stable shell to the existing agent runtime event flow without changing Core, Tools, Providers, or Storage ownership.
+Add an interactive approval prompt and richer tool activity rendering without changing Core, Tools, Providers, or Storage ownership.

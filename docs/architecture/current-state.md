@@ -7,7 +7,7 @@ This audit describes the current implementation shape before any large Pi-inspir
 EvoLoop is a Windows-first local coding agent split into these projects:
 
 - `Agent.Cli`: pure CLI entry point, single-turn commands, legacy REPL, console approval, and ANSI rendering.
-- `Agent.Tui`: separate Terminal.Gui executable with a minimal shell; it records input but does not run agent tasks yet.
+- `Agent.Tui`: separate Terminal.Gui executable with transcript, slash commands, TUI-local observer/approval adapters, and shared runtime task dispatch through `Agent.Hosting`.
 - `Agent.Hosting`: shared startup, workspace resolution, config/capability setup, and runtime wiring.
 - `Agent.Core`: focused contract/config files, path safety, policy, ReAct loop, model adapter contracts, prompt/context builders, recovery logic, and tool-turn execution.
 - `Agent.Tools`: file, patch, snapshot, git, search, and shell tools.
@@ -19,7 +19,7 @@ Startup flow:
 1. CLI/TUI applies .NET privacy defaults.
 2. `AgentRuntimeContext.CreateAsync` resolves the workspace root, loads config, and probes capabilities.
 3. `AgentExecutionHost.Create` wires model router, tools, patch service, search service, policy, event stores, memory store, context factory, and `ReActAgentLoop`.
-4. CLI commands call `CliSession.RunTaskAsync`; TUI currently only renders a static interactive shell.
+4. CLI commands call `CliSession.RunTaskAsync`; TUI input calls `AgentTaskRunner` through TUI-local observer and approval adapters.
 
 Runtime flow:
 
@@ -52,7 +52,7 @@ Events and UI:
 
 - Runtime emits `AgentRunEvent` values to `IAgentRunObserver`.
 - CLI renders these with `SpinnerObserver`.
-- TUI has its own transcript and slash command model, but no runtime observer or approval bridge yet.
+- TUI has its own transcript, slash command model, runtime observer, and approval bridge. Approval requests are recorded and rejected by default until an interactive prompt is added.
 
 ## Current Problems
 
@@ -84,7 +84,6 @@ No definitely removable production code was confirmed in this audit. The remaini
   - `AgentStartup.HasApiAuthConfigured`
   - `RuntimeCapabilityProbe.HasApiAuthConfigured`
 - Stale documented state:
-  - minimal TUI is intentionally pending integration.
   - checked-in Windows bundles have not been regenerated for `Agent.Tui`.
 
 ## Mixed Responsibilities

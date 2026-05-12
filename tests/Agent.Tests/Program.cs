@@ -17,7 +17,7 @@ var tests = new List<(string Name, Func<Task> Run)>
     ("TUI slash commands filter and render help", TestTuiSlashCommands),
     ("TUI parser accepts theme options", TestTuiParserThemeOptions),
     ("TUI theme resolves default and no-color variants", TestTuiThemeResolution),
-    ("TUI app records pending-agent message", TestTuiAppRecordsPendingAgentMessage),
+    ("TUI app rejects task when runtime is not attached", TestTuiAppRejectsTaskWithoutRuntime),
     ("TUI app reports unknown slash command", TestTuiUnknownSlashCommand),
     ("TUI runtime observer records agent events", TestTuiRuntimeObserverRecordsEvents),
     ("TUI approval service records default rejection", TestTuiApprovalServiceRecordsDefaultRejection),
@@ -142,7 +142,7 @@ static Task TestTuiSlashCommands()
     Assert(help.Handled, "Expected /help to be handled.");
     Assert(!help.ExitRequested, "Expected /help to keep the TUI open.");
     Assert(help.Message.Contains("/exit", StringComparison.Ordinal), "Expected help to list /exit.");
-    Assert(help.Message.Contains("agent integration pending", StringComparison.OrdinalIgnoreCase), "Expected help to state current limitation.");
+    Assert(help.Message.Contains("shared agent runtime", StringComparison.OrdinalIgnoreCase), "Expected help to describe runtime-backed input.");
     return Task.CompletedTask;
 }
 
@@ -167,15 +167,15 @@ static Task TestTuiThemeResolution()
     return Task.CompletedTask;
 }
 
-static Task TestTuiAppRecordsPendingAgentMessage()
+static Task TestTuiAppRejectsTaskWithoutRuntime()
 {
     var app = CreateTestTuiApp();
     var result = app.Submit("inspect project");
 
-    Assert(result.Handled, "Expected normal input to be handled.");
+    Assert(!result.Handled, "Expected normal input without attached runtime to be rejected.");
     Assert(!result.ExitRequested, "Expected normal input to keep TUI open.");
     Assert(app.Messages.Any(m => m.Role == TuiMessageRole.User && m.Content == "inspect project"), "Expected user message in transcript.");
-    Assert(app.Messages.Any(m => m.Content.Contains("Agent integration pending", StringComparison.Ordinal)), "Expected pending integration notice.");
+    Assert(app.Messages.Any(m => m.Content.Contains("runtime is not attached", StringComparison.Ordinal)), "Expected missing runtime notice.");
     return Task.CompletedTask;
 }
 
@@ -227,11 +227,11 @@ static Task TestTuiTranscriptRenderer()
     var rendered = TranscriptRenderer.Render(new[]
     {
         TuiMessage.User("hello"),
-        TuiMessage.System("agent integration pending")
+        TuiMessage.System("runtime event")
     }, 60);
 
     Assert(rendered.Contains("[user] hello", StringComparison.Ordinal), "Expected user role prefix.");
-    Assert(rendered.Contains("[system] agent integration pending", StringComparison.Ordinal), "Expected system role prefix.");
+    Assert(rendered.Contains("[system] runtime event", StringComparison.Ordinal), "Expected system role prefix.");
     return Task.CompletedTask;
 }
 
@@ -244,7 +244,7 @@ static TuiApp CreateTestTuiApp()
             "reasoning",
             "local-only degraded",
             "model unavailable",
-            ApprovalPolicyMode.WorkspaceWrite.ToString(),
+            ApprovalPolicyMode.WorkspaceWrite,
             TuiTheme.DefaultName,
             false,
             true,

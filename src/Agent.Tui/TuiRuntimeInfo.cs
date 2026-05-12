@@ -1,4 +1,5 @@
 using Agent.Hosting;
+using Agent.Core;
 
 namespace Agent.Tui;
 
@@ -8,7 +9,7 @@ internal sealed record TuiRuntimeInfo(
     string Profile,
     string ModeLabel,
     string ModelStatus,
-    string ApprovalMode,
+    ApprovalPolicyMode ApprovalMode,
     string ThemeName,
     bool OfflineStrict,
     bool ApiAuthConfigured,
@@ -22,7 +23,7 @@ internal sealed record TuiRuntimeInfo(
             arguments.Profile,
             context.Capabilities.ModeLabel,
             context.Capabilities.ModelStatus,
-            context.Config.Safety.DefaultApprovalMode.ToString(),
+            context.Config.Safety.DefaultApprovalMode,
             themeName,
             context.Config.Safety.OfflineStrictMode,
             AgentStartup.HasApiAuthConfigured(context.Config),

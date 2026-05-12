@@ -142,6 +142,8 @@ internal sealed class TerminalGuiTuiHost
             status.SetNeedsDisplay();
         }
 
+        app.Changed += () => Application.MainLoop.Invoke(RefreshTranscript);
+
         void Stop()
         {
             Application.RequestStop();
@@ -156,12 +158,15 @@ internal sealed class TerminalGuiTuiHost
             }
 
             input.Text = string.Empty;
-            app.Submit(value);
             RefreshTranscript();
-            if (app.ExitRequested)
+            _ = Task.Run(async () =>
             {
-                Stop();
-            }
+                await app.SubmitAsync(value, CancellationToken.None);
+                if (app.ExitRequested)
+                {
+                    Application.MainLoop.Invoke(Stop);
+                }
+            });
         }
 
         input.KeyPress += args =>
