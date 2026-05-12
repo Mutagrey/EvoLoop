@@ -33,6 +33,13 @@ internal sealed class DefaultPromptBuilder : IPromptBuilder
             sb.AppendLine("- Review mode is inspection-only. Focus on risks, regressions, and missing tests.");
         }
 
+        var filePromptSections = PromptFileOverrides.BuildSystemSections(context.WorkspaceRoot);
+        if (!string.IsNullOrWhiteSpace(filePromptSections))
+        {
+            sb.AppendLine();
+            sb.AppendLine(filePromptSections);
+        }
+
         sb.AppendLine("Available tools:");
         foreach (var tool in toolList)
         {

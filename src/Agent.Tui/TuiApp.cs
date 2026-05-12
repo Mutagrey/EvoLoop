@@ -13,6 +13,8 @@ internal sealed class TuiApp
     private AgentRunResult? _lastPlan;
     private bool _taskRunning;
     private Func<ApprovalRequest, CancellationToken, Task<bool>>? _approvalPrompt;
+    private Func<CancellationToken, Task<TuiRuntimeInfo>>? _configReload;
+    private IConfigFileOpener _configFileOpener = new DefaultConfigFileOpener();
 
     public TuiApp(TuiRuntimeInfo runtime, SlashCommandRegistry commands)
     {
@@ -21,7 +23,7 @@ internal sealed class TuiApp
         AddStartupMessages();
     }
 
-    public TuiRuntimeInfo Runtime { get; }
+    public TuiRuntimeInfo Runtime { get; private set; }
     public SlashCommandRegistry Commands { get; }
     public event Action? Changed;
     public IReadOnlyList<TuiMessage> Messages
@@ -69,6 +71,16 @@ internal sealed class TuiApp
         _approvalPrompt = approvalPrompt;
     }
 
+    public void AttachConfigReload(Func<CancellationToken, Task<TuiRuntimeInfo>> configReload)
+    {
+        _configReload = configReload;
+    }
+
+    public void AttachConfigFileOpener(IConfigFileOpener opener)
+    {
+        _configFileOpener = opener;
+    }
+
     public TuiCommandResult Submit(string input)
     {
         return SubmitAsync(input, CancellationToken.None).GetAwaiter().GetResult();
@@ -105,6 +117,32 @@ internal sealed class TuiApp
                 : $"Session: {_lastRun.SessionId}; success={_lastRun.Success}; steps={_lastRun.Steps}";
             AddStatus(message);
             return new TuiCommandResult(true, false, false, message);
+        }
+
+        if (text.Equals("/config", StringComparison.OrdinalIgnoreCase))
+        {
+            var message = TuiConfigFormatter.Format(Runtime);
+            AddMessage(TuiMessage.System(message));
+            return new TuiCommandResult(true, false, false, message);
+        }
+
+        if (text.Equals("/config path", StringComparison.OrdinalIgnoreCase))
+        {
+            var message = TuiConfigFormatter.FormatPath(Runtime);
+            AddStatus(message);
+            return new TuiCommandResult(true, false, false, message);
+        }
+
+        if (text.Equals("/config open", StringComparison.OrdinalIgnoreCase))
+        {
+            var result = _configFileOpener.Open(Runtime.ConfigPath);
+            AddMessage(result.Success ? TuiMessage.Status(result.Message) : TuiMessage.Error(result.Message));
+            return new TuiCommandResult(true, false, !result.Success, result.Message);
+        }
+
+        if (text.Equals("/config reload", StringComparison.OrdinalIgnoreCase))
+        {
+            return await ReloadConfigAsync(ct);
         }
 
         if (text.StartsWith("/", StringComparison.Ordinal))
@@ -166,9 +204,9 @@ internal sealed class TuiApp
 
     private void AddStartupMessages()
     {
-        AddMessage(TuiMessage.System("TUI shell ready. Type a task, /plan <task>, /review [focus], /status, /help, or /exit."));
+        AddMessage(TuiMessage.System("TUI shell ready. Type a task, /plan <task>, /review [focus], /config, /status, /help, or /exit."));
         AddStatus($"Workspace: {Runtime.Workspace}");
-        AddStatus($"Profile: {Runtime.Profile}; runtime mode: {Runtime.ModeLabel}");
+        AddStatus($"Model profile: {Runtime.Profile}; model: {Runtime.ModelId}; runtime mode: {Runtime.ModeLabel}");
 
         if (!Runtime.Workspace.Equals(Runtime.RequestedWorkspace, StringComparison.OrdinalIgnoreCase))
         {
@@ -188,6 +226,43 @@ internal sealed class TuiApp
         if (!Runtime.CanRunAgentTasks)
         {
             AddStatus($"Model execution unavailable: {Runtime.ModelStatus}");
+        }
+    }
+
+    private async Task<TuiCommandResult> ReloadConfigAsync(CancellationToken ct)
+    {
+        lock (_sync)
+        {
+            if (_taskRunning)
+            {
+                const string busy = "Cannot reload config while a task is running.";
+                _messages.Add(TuiMessage.Error(busy));
+                Changed?.Invoke();
+                return new TuiCommandResult(false, false, true, busy);
+            }
+        }
+
+        var reload = _configReload;
+        if (reload is null)
+        {
+            const string notConfigured = "Config reload is not attached.";
+            AddMessage(TuiMessage.Error(notConfigured));
+            return new TuiCommandResult(false, false, true, notConfigured);
+        }
+
+        try
+        {
+            var updated = await reload(ct);
+            Runtime = updated;
+            var message = $"Config reloaded from {Runtime.ConfigPath}. Model profile: {Runtime.Profile}; mode: {Runtime.ModeLabel}.";
+            AddStatus(message);
+            return new TuiCommandResult(true, false, false, message);
+        }
+        catch (Exception ex)
+        {
+            var message = $"Config reload failed: {ex.Message}";
+            AddMessage(TuiMessage.Error(message));
+            return new TuiCommandResult(false, false, true, message);
         }
     }
 

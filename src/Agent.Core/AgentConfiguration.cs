@@ -5,9 +5,7 @@ public sealed class AgentConfig
     public ApiConfig Api { get; init; } = new();
     public Dictionary<string, ModelProfileConfig> Models { get; init; } = new(StringComparer.OrdinalIgnoreCase)
     {
-        ["reasoning"] = new() { Provider = "custom", Model = "deepseek", Temperature = 0.12, MaxTokens = 2200 },
-        ["fast"] = new() { Provider = "custom", Model = "qwen", Temperature = 0.05, MaxTokens = 1000 },
-        ["fallback"] = new() { Provider = "custom", Model = "glm", Temperature = 0.18, MaxTokens = 1600 }
+        ["reasoning"] = new() { Provider = "custom", Model = "deepseek", Temperature = 0.12, MaxTokens = 2200 }
     };
 
     public WorkspaceConfig Workspace { get; init; } = new();
@@ -77,6 +75,7 @@ public sealed class SafetyConfig
 
 public sealed class RuntimeConfig
 {
+    public List<string> ProfileFallbackOrder { get; init; } = new();
     public int MaxSteps { get; init; } = 30;
     public int MaxInvalidModelResponses { get; init; } = 6;
     public int MaxConsecutiveFinalWithoutTools { get; init; } = 5;

@@ -27,6 +27,7 @@ static async Task TestLoopSwitchesProfileAfterInvalidResponses()
         },
         Runtime = new RuntimeConfig
         {
+            ProfileFallbackOrder = new List<string> { "fallback" },
             MaxSteps = 8,
             MaxInvalidModelResponses = 4,
             MaxConsecutiveFinalWithoutTools = 4,

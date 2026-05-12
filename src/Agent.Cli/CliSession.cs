@@ -21,7 +21,7 @@ internal static class CliSession
         renderer.WriteHeader("EvoLoop Agent CLI");
         renderer.WritePanel(
             "Session",
-            $"Workspace: {workspace}\nProfile: {profile}\nMode: {capabilities.ModeLabel}\nCommands: /task, /plan, /review, /status, /tools, /history, /memory, /cmdlog, /config, /doctor, /undo, /exit\nRecall: !N");
+            $"Workspace: {workspace}\nModel profile: {profile}\nMode: {capabilities.ModeLabel}\nCommands: /task, /plan, /review, /status, /tools, /history, /memory, /cmdlog, /config, /doctor, /undo, /exit\nRecall: !N");
 
         AgentRunResult? lastRun = null;
         AgentRunResult? lastPlan = null;
@@ -265,6 +265,7 @@ internal static class CliSession
         var apiKeyInConfig = !string.IsNullOrWhiteSpace(config.Api.ApiKey);
         var apiKeyState = (apiKeyInEnv || apiKeyInConfig) ? "present" : "missing";
         var apiKeySource = apiKeyInEnv ? "env" : (apiKeyInConfig ? "config" : "none");
-        return $"Path: {configPath}\nProfiles: {models}\nAPI URL: {config.Api.BaseUrl}\nOpenAI Path: {config.Api.OpenAiCompatiblePath}\nCustom Path: {config.Api.CustomPath}\nSystemPromptMode: {config.Api.SystemPromptMode}\nSystemPromptFallbackToUserMessage: {config.Api.SystemPromptFallbackToUserMessage}\nApiKeyEnvVar: {config.Api.ApiKeyEnvVar}\nApiKey: {apiKeyState} ({apiKeySource})\nOfflineStrict: {config.Safety.OfflineStrictMode}\nAllowedHosts: {hosts}\nMemoryEnabled: {config.Runtime.MemoryEnabled}\nAdaptivePrompting: {config.Runtime.AdaptivePromptingEnabled}";
+        var fallbackOrder = config.Runtime.ProfileFallbackOrder.Count == 0 ? "<none>" : string.Join(", ", config.Runtime.ProfileFallbackOrder);
+        return $"Path: {configPath}\nModel profiles: {models}\nProfileFallbackOrder: {fallbackOrder}\nAPI URL: {config.Api.BaseUrl}\nOpenAI Path: {config.Api.OpenAiCompatiblePath}\nCustom Path: {config.Api.CustomPath}\nSystemPromptMode: {config.Api.SystemPromptMode}\nSystemPromptFallbackToUserMessage: {config.Api.SystemPromptFallbackToUserMessage}\nApiKeyEnvVar: {config.Api.ApiKeyEnvVar}\nApiKey: {apiKeyState} ({apiKeySource})\nOfflineStrict: {config.Safety.OfflineStrictMode}\nAllowedHosts: {hosts}\nMemoryEnabled: {config.Runtime.MemoryEnabled}\nAdaptivePrompting: {config.Runtime.AdaptivePromptingEnabled}";
     }
 }

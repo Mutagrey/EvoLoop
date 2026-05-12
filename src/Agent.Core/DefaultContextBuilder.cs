@@ -24,6 +24,14 @@ internal sealed class DefaultContextBuilder : IContextBuilder
             messages.Add(new ModelMessage("user", skillIndex));
         }
 
+        var promptTemplates = PromptFileOverrides.BuildTemplateIndexMessage(
+            request.WorkspaceRoot,
+            context.Config.Runtime.ContextProjectDocMaxChars / 3);
+        if (!string.IsNullOrWhiteSpace(promptTemplates))
+        {
+            messages.Add(new ModelMessage("user", promptTemplates));
+        }
+
         messages.Add(new ModelMessage("user", BuildRuntimeContextMessage(context)));
         messages.Add(new ModelMessage("user", $"TASK:\n{request.Task}"));
 

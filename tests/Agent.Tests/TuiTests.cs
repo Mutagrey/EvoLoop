@@ -16,6 +16,10 @@ internal static class TuiTests
         ("TUI app dispatches plan command as read-only plan", TestTuiAppDispatchesPlanCommand),
         ("TUI app dispatches review command as read-only review", TestTuiAppDispatchesReviewCommand),
         ("TUI app reports unknown slash command", TestTuiUnknownSlashCommand),
+        ("TUI config command renders grouped settings", TestTuiConfigCommandRendersGroupedSettings),
+        ("TUI config path command shows config paths", TestTuiConfigPathCommandShowsConfigPaths),
+        ("TUI config open command uses attached opener", TestTuiConfigOpenCommandUsesAttachedOpener),
+        ("TUI config reload updates runtime info", TestTuiConfigReloadUpdatesRuntimeInfo),
         ("TUI runtime observer records agent events", TestTuiRuntimeObserverRecordsEvents),
         ("TUI runtime formatter renders compact tool events", TestTuiRuntimeFormatterToolEvents),
         ("TUI runtime formatter renders approval and completion events", TestTuiRuntimeFormatterApprovalAndCompletionEvents),
@@ -131,6 +135,57 @@ static Task TestTuiUnknownSlashCommand()
     Assert(app.Messages.Last().Role == TuiMessageRole.Error, "Expected unknown command to append an error message.");
     Assert(app.Messages.Last().Content.Contains("Unknown command", StringComparison.Ordinal), "Expected unknown command details.");
     return Task.CompletedTask;
+}
+
+static Task TestTuiConfigCommandRendersGroupedSettings()
+{
+    var app = CreateTestTuiApp();
+    var result = app.Submit("/config");
+
+    Assert(result.Handled, "Expected /config to be handled.");
+    Assert(app.Messages.Last().Content.Contains("Connection", StringComparison.Ordinal), "Expected connection section.");
+    Assert(app.Messages.Last().Content.Contains("Model Profiles", StringComparison.Ordinal), "Expected model profile section.");
+    Assert(app.Messages.Last().Content.Contains("Tool Calling", StringComparison.Ordinal), "Expected tool-calling section.");
+    Assert(app.Messages.Last().Content.Contains("Limits / Advanced", StringComparison.Ordinal), "Expected advanced limits section.");
+    return Task.CompletedTask;
+}
+
+static Task TestTuiConfigPathCommandShowsConfigPaths()
+{
+    var app = CreateTestTuiApp();
+    var result = app.Submit("/config path");
+
+    Assert(result.Handled, "Expected /config path to be handled.");
+    Assert(app.Messages.Last().Content.Contains("loaded config:", StringComparison.Ordinal), "Expected loaded config path.");
+    Assert(app.Messages.Last().Content.Contains("default config:", StringComparison.Ordinal), "Expected default config path.");
+    return Task.CompletedTask;
+}
+
+static Task TestTuiConfigOpenCommandUsesAttachedOpener()
+{
+    var app = CreateTestTuiApp();
+    var opener = new CapturingConfigFileOpener(new ConfigOpenResult(true, "opened"));
+    app.AttachConfigFileOpener(opener);
+
+    var result = app.Submit("/config open");
+
+    Assert(result.Handled, "Expected /config open to be handled.");
+    Assert(!result.IsError, "Expected successful open result.");
+    Assert(opener.Paths.Count == 1, "Expected opener to be called once.");
+    Assert(opener.Paths[0] == app.Runtime.ConfigPath, "Expected opener to receive current config path.");
+    return Task.CompletedTask;
+}
+
+static async Task TestTuiConfigReloadUpdatesRuntimeInfo()
+{
+    var app = CreateTestTuiApp();
+    app.AttachConfigReload(_ => Task.FromResult(app.Runtime with { ModeLabel = "full", ModelId = "reloaded-model" }));
+
+    var result = await app.SubmitAsync("/config reload", CancellationToken.None);
+
+    Assert(result.Handled, "Expected /config reload to be handled.");
+    Assert(app.Runtime.ModeLabel == "full", "Expected runtime mode to update.");
+    Assert(app.Runtime.ModelId == "reloaded-model", "Expected model id to update.");
 }
 
 static async Task TestTuiRuntimeObserverRecordsEvents()
@@ -404,4 +459,22 @@ internal sealed record TuiTaskRunnerCall(
     string Profile,
     AgentExecutionMode ExecutionMode,
     ApprovalPolicyMode ApprovalMode);
+
+internal sealed class CapturingConfigFileOpener : IConfigFileOpener
+{
+    private readonly ConfigOpenResult _result;
+
+    public CapturingConfigFileOpener(ConfigOpenResult result)
+    {
+        _result = result;
+    }
+
+    public List<string> Paths { get; } = new();
+
+    public ConfigOpenResult Open(string path)
+    {
+        Paths.Add(path);
+        return _result;
+    }
+}
 }

@@ -19,9 +19,33 @@ public static class Program
             var app = new TuiApp(
                 TuiRuntimeInfo.From(context, command, theme.Name),
                 SlashCommandRegistry.CreateDefault());
-            using var host = AgentExecutionHost.Create(context, new TuiApprovalService(app, app.RequestApprovalAsync));
-            app.AttachTaskRunner(new TuiTaskRunner(new AgentTaskRunner(host, context)));
-            new TerminalGuiTuiHost(theme).Run(app);
+            AgentExecutionHost? host = null;
+            void AttachRuntime(AgentRuntimeContext runtimeContext)
+            {
+                host?.Dispose();
+                host = AgentExecutionHost.Create(runtimeContext, new TuiApprovalService(app, app.RequestApprovalAsync));
+                app.AttachTaskRunner(new TuiTaskRunner(new AgentTaskRunner(host, runtimeContext)));
+            }
+
+            AttachRuntime(context);
+            app.AttachConfigReload(async ct =>
+            {
+                var reloaded = await AgentRuntimeContext.CreateAsync(
+                    new AgentRuntimeOptions(command.Workspace, command.ConfigPath, command.OfflineStrict),
+                    ct);
+                AttachRuntime(reloaded);
+                return TuiRuntimeInfo.From(reloaded, command, theme.Name);
+            });
+
+            try
+            {
+                new TerminalGuiTuiHost(theme).Run(app);
+            }
+            finally
+            {
+                host?.Dispose();
+            }
+
             return 0;
         }
         catch (Exception ex)

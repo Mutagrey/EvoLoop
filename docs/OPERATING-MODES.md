@@ -81,6 +81,8 @@ Behavior:
 Tool-calling mode is separate from runtime and execution mode.
 
 - Existing model profiles default to `JsonReActFallback`.
+- `JsonReActFallback` asks for one JSON object and one tool call per model turn; native tool modes can return multiple provider tool calls.
 - `NativeNonStreamingTools`, `NativeStreamingTools`, and `Auto` are opt-in per model profile.
 - `Auto` may probe a gateway with a safe no-op tool and falls back to JSON-ReAct when native tools are rejected or ignored.
 - `local-only degraded` still blocks model-backed `run` and `plan` tasks before any model adapter is called.
+- Profile switching is explicit through `runtime.profileFallbackOrder`; profile names do not imply fallback behavior by themselves.

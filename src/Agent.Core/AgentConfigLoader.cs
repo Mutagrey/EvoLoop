@@ -34,10 +34,8 @@ public static class AgentConfigLoader
 
         if (!File.Exists(path))
         {
-            var defaultConfig = new AgentConfig();
-            var defaultJson = JsonSerializer.Serialize(defaultConfig, JsonOptions);
-            File.WriteAllText(path, defaultJson);
-            return defaultConfig;
+            File.WriteAllText(path, CreateDefaultConfigJson());
+            return new AgentConfig();
         }
 
         var json = File.ReadAllText(path);
@@ -56,5 +54,50 @@ public static class AgentConfigLoader
 
         var json = JsonSerializer.Serialize(config, JsonOptions);
         File.WriteAllText(path, json);
+    }
+
+    public static string CreateDefaultConfigJson()
+    {
+        var defaults = new AgentConfig();
+        var reasoning = defaults.Models["reasoning"];
+        var minimal = new Dictionary<string, object?>
+        {
+            ["api"] = new Dictionary<string, object?>
+            {
+                ["baseUrl"] = defaults.Api.BaseUrl,
+                ["openAiCompatiblePath"] = defaults.Api.OpenAiCompatiblePath,
+                ["customPath"] = defaults.Api.CustomPath,
+                ["apiKeyEnvVar"] = defaults.Api.ApiKeyEnvVar,
+                ["timeoutSeconds"] = defaults.Api.TimeoutSeconds
+            },
+            ["models"] = new Dictionary<string, object?>
+            {
+                ["reasoning"] = new Dictionary<string, object?>
+                {
+                    ["provider"] = reasoning.Provider,
+                    ["model"] = reasoning.Model,
+                    ["temperature"] = reasoning.Temperature,
+                    ["maxTokens"] = reasoning.MaxTokens,
+                    ["toolCallingMode"] = reasoning.ToolCallingMode
+                }
+            },
+            ["safety"] = new Dictionary<string, object?>
+            {
+                ["requireApprovalForWrites"] = defaults.Safety.RequireApprovalForWrites,
+                ["requireApprovalForCommits"] = defaults.Safety.RequireApprovalForCommits,
+                ["requireApprovalForRiskyShell"] = defaults.Safety.RequireApprovalForRiskyShell,
+                ["denyOutsideWorkspace"] = defaults.Safety.DenyOutsideWorkspace,
+                ["offlineStrictMode"] = defaults.Safety.OfflineStrictMode,
+                ["defaultApprovalMode"] = defaults.Safety.DefaultApprovalMode,
+                ["allowedNetworkHosts"] = defaults.Safety.AllowedNetworkHosts
+            },
+            ["ui"] = new Dictionary<string, object?>
+            {
+                ["useColor"] = defaults.Ui.UseColor,
+                ["compactMode"] = defaults.Ui.CompactMode
+            }
+        };
+
+        return JsonSerializer.Serialize(minimal, JsonOptions);
     }
 }

@@ -74,6 +74,10 @@ Ordered refactor work follows `docs/architecture/refactor-plan.md`; this file re
 - Added Phase 9 coverage for snapshot diff evidence, missing snapshot manifests, directory deletion review evidence, and review-mode denials for mutations and shell execution.
 - Completed Phase 9 safety/test cleanup with config loading, offline-strict override, and local-only degraded-mode coverage.
 - Added append-only mutation snapshot history and multi-file `workspace_snapshot_diff` summaries for local review fallback.
+- Simplified generated config to a minimal file with one `reasoning` model profile and no default `fast`/`fallback` profiles.
+- Replaced hidden model-profile switch ordering with explicit `runtime.profileFallbackOrder`.
+- Added Pi-inspired prompt files: global/workspace `SYSTEM.md`, `APPEND_SYSTEM.md`, and indexed workspace prompt templates under `.evoloop/prompts/*.md`.
+- Added TUI `/config`, `/config path`, `/config open`, and `/config reload` commands with grouped settings and runtime reload wiring.
 
 ## Current Problems
 

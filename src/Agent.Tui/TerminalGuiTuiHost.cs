@@ -50,11 +50,11 @@ internal sealed class TerminalGuiTuiHost
             ColorScheme = _theme.Title
         };
 
-        var profile = new Label($"profile {app.Runtime.Profile}")
+        var profile = new Label($"model profile {app.Runtime.Profile}")
         {
             X = Pos.Right(title) + 2,
             Y = 0,
-            Width = 22,
+            Width = 32,
             Height = 1,
             ColorScheme = _theme.Muted
         };
@@ -137,9 +137,15 @@ internal sealed class TerminalGuiTuiHost
         void RefreshTranscript()
         {
             transcript.Text = app.Transcript(SafeConsoleWidth());
+            profile.Text = $"model profile {app.Runtime.Profile}";
+            mode.Text = $"mode {app.Runtime.ModeLabel}";
+            cwd.Text = app.Runtime.Workspace;
             status.Text = app.StatusLine;
             transcript.MoveEnd();
             transcript.SetNeedsDisplay();
+            profile.SetNeedsDisplay();
+            mode.SetNeedsDisplay();
+            cwd.SetNeedsDisplay();
             status.SetNeedsDisplay();
         }
 

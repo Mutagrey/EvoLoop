@@ -11,7 +11,7 @@ EvoLoop is a model-backed coding agent CLI with explicit fallback behavior for r
 ## Components
 
 - `Agent.Tui`
-  TUI executable target. Current implementation is a prepared placeholder for the future Terminal.Gui shell.
+  TUI executable target with runtime-backed task input, approval prompts, and config inspection commands.
 - `Agent.Cli`
   Pure CLI executable target: argument parsing, REPL, `doctor`, command dispatch for `run`, `plan`, and `review`.
 - `Agent.Hosting`
@@ -96,13 +96,15 @@ Profiles default to `JsonReActFallback` for compatibility with restricted corpor
 - `NativeStreamingTools`
   Sends OpenAI-compatible native tools with `stream=true`, accumulates fragmented `choices[].delta.tool_calls[].function.arguments`, and normalizes the completed call.
 - `JsonReActFallback`
-  Sends no native tool list. The prompt requires one strict JSON object: tool, final, or clarify.
+  Sends no native tool list. The prompt requires one strict JSON object: one tool call, final, or clarify. Multi-tool execution happens as repeated model turns after observations; native tool modes may return multiple tool calls in one provider response.
 - `PlainTextRecoveryFallback`
   Last-resort parser for weak model output such as `Action: fs_read` plus `Arguments: {...}`.
 - `Auto`
   Optional OpenAI-compatible mode that can probe native non-streaming tool support with a safe `evoloop_probe_noop` tool, then falls back to JSON-ReAct if unsupported or ignored.
 
 Native tool support is never assumed. Provider-specific payloads and parsing stay in `Agent.Providers`; the runtime only executes normalized tool blocks.
+
+Model profile fallback is explicit. The runtime starts with the requested profile and only switches to profiles named in `runtime.profileFallbackOrder`; profile names such as `fast` or `fallback` have no built-in behavior.
 
 ## Execution Modes
 
@@ -156,6 +158,16 @@ Native tool support is never assumed. Provider-specific payloads and parsing sta
 ## Skills
 
 Skills use progressive disclosure only. At startup the context builder scans `.evoloop/skills/*/SKILL.md`, extracts a name, short description, and relative path, and injects only that index. The model must read the full `SKILL.md` through `fs_read` before applying it.
+
+## Prompts
+
+The core harness contract remains in code: strict JSON response shape, tool rules, approval expectations, and path/tool safety. Optional prompt files may add guidance without replacing that contract:
+
+- user/global: `~/.evoloop-agent/SYSTEM.md` and `~/.evoloop-agent/APPEND_SYSTEM.md`
+- workspace: `.evoloop/SYSTEM.md` and `.evoloop/APPEND_SYSTEM.md`
+- workspace prompt templates: `.evoloop/prompts/*.md`, indexed by path and read on demand with `fs_read`
+
+Tool descriptions stay with tool implementations through `ToolSchema`; they are not duplicated into Markdown prompt files.
 
 ## Boundaries
 

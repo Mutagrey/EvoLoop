@@ -14,7 +14,7 @@ agent.cmd
 
 Compatibility commands such as `agent.cmd doctor`, `agent.cmd run`, `agent.cmd plan`, `agent.cmd review`, and `agent.cmd repl` route to the CLI target. Use `agent-cli.cmd` when you want the CLI explicitly.
 
-The shell shows workspace, profile, runtime mode, a readonly transcript, an input line, and a status bar.
+The shell shows workspace, model profile, runtime mode, a readonly transcript, an input line, and a status bar.
 
 ## Theme
 
@@ -35,6 +35,10 @@ Available themes:
 
 - `/help`: show available TUI commands.
 - `/status`: show the last task status.
+- `/config`: show grouped settings: connection, model profiles, safety, tool calling, limits, prompts, and storage.
+- `/config path`: show loaded and default config paths.
+- `/config open`: open the loaded config file with `$VISUAL`, `$EDITOR`, or Windows `notepad.exe`.
+- `/config reload`: reload config and rebuild the runtime host.
 - `/plan <task>`: run read-only plan mode.
 - `/review [focus]`: review current workspace changes.
 - `/exit`: close the TUI.

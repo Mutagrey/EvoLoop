@@ -1,5 +1,6 @@
 using Agent.Core;
 using Agent.Hosting;
+using System.Text.Json;
 using static TestAssert;
 
 internal static class RuntimeCapabilityTests
@@ -8,6 +9,8 @@ internal static class RuntimeCapabilityTests
     {
         ("Config loader creates default config at custom path", TestConfigLoaderCreatesDefaultConfigAtCustomPath),
         ("Config loader reads custom settings", TestConfigLoaderReadsCustomSettings),
+        ("Config loader creates minimal default config", TestConfigLoaderCreatesMinimalDefaultConfig),
+        ("Runtime config uses explicit profile fallback order", TestRuntimeConfigUsesExplicitProfileFallbackOrder),
         ("Effective config applies offline strict override", TestEffectiveConfigAppliesOfflineStrictOverride),
         ("Capability probe selects local-only degraded mode without model", TestCapabilityProbeSelectsLocalOnlyModeWithoutModel),
         ("Capability probe keeps local-only degraded when offline strict has no model", TestCapabilityProbeKeepsLocalOnlyDegradedWithoutModel),
@@ -27,6 +30,72 @@ static Task TestConfigLoaderCreatesDefaultConfigAtCustomPath()
         Assert(config.Models.ContainsKey("reasoning"), "Expected default reasoning model profile.");
         Assert(config.Safety.DefaultApprovalMode == ApprovalPolicyMode.WorkspaceWrite, "Expected default approval mode.");
         return Task.CompletedTask;
+    }
+    finally
+    {
+        if (Directory.Exists(temp))
+        {
+            Directory.Delete(temp, true);
+        }
+    }
+}
+
+static Task TestConfigLoaderCreatesMinimalDefaultConfig()
+{
+    var temp = Path.Combine(Path.GetTempPath(), "agent-config-minimal-" + Guid.NewGuid().ToString("n"));
+    var configPath = Path.Combine(temp, "config.json");
+
+    try
+    {
+        AgentConfigLoader.LoadOrCreate(configPath);
+        using var doc = JsonDocument.Parse(File.ReadAllText(configPath));
+        var root = doc.RootElement;
+        Assert(root.TryGetProperty("api", out _), "Expected api section.");
+        Assert(root.TryGetProperty("models", out var models), "Expected models section.");
+        Assert(models.TryGetProperty("reasoning", out _), "Expected reasoning profile.");
+        Assert(!models.TryGetProperty("fast", out _), "Expected no default fast profile.");
+        Assert(!models.TryGetProperty("fallback", out _), "Expected no default fallback profile.");
+        Assert(!root.TryGetProperty("runtime", out _), "Expected advanced runtime defaults to stay out of generated config.");
+        return Task.CompletedTask;
+    }
+    finally
+    {
+        if (Directory.Exists(temp))
+        {
+            Directory.Delete(temp, true);
+        }
+    }
+}
+
+static async Task TestRuntimeConfigUsesExplicitProfileFallbackOrder()
+{
+    var temp = Path.Combine(Path.GetTempPath(), "agent-config-fallback-order-" + Guid.NewGuid().ToString("n"));
+    var configPath = Path.Combine(temp, "config.json");
+    Directory.CreateDirectory(temp);
+
+    try
+    {
+        await File.WriteAllTextAsync(configPath, """
+{
+  "models": {
+    "reasoning": {
+      "provider": "custom",
+      "model": "deepseek"
+    },
+    "fallback": {
+      "provider": "custom",
+      "model": "glm"
+    }
+  },
+  "runtime": {
+    "profileFallbackOrder": [ "fallback" ]
+  }
+}
+""");
+
+        var config = AgentConfigLoader.LoadOrCreate(configPath);
+        Assert(config.Runtime.ProfileFallbackOrder.SequenceEqual(new[] { "fallback" }), "Expected explicit profile fallback order.");
+        Assert(config.Models.ContainsKey("fallback"), "Expected optional fallback profile to load.");
     }
     finally
     {

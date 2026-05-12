@@ -87,7 +87,7 @@ internal sealed class SlashCommandRegistry
 
         sb.AppendLine();
         sb.AppendLine("Task input runs through the shared agent runtime.");
-        sb.AppendLine("Use /status, /plan <task>, /review [focus], or plain text for run mode.");
+        sb.AppendLine("Use /config, /status, /plan <task>, /review [focus], or plain text for run mode.");
         return sb.ToString().TrimEnd();
     }
 }

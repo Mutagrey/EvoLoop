@@ -23,7 +23,9 @@ Runtime modes:
 
 Model tool calling:
 - JSON-ReAct fallback remains the default for compatibility
+- JSON-ReAct fallback uses one tool call per model turn; native tool modes are opt-in
 - OpenAI-compatible native non-streaming/streaming tools are available as opt-in profile modes
+- model profile fallback is configured explicitly with `runtime.profileFallbackOrder`
 
 Terminal behavior:
 - freshly generated packages map `agent.cmd` to the TUI target

@@ -55,9 +55,10 @@ internal sealed class ReActProfileSelection
     public List<string> BuildProfilePlan(string requestedProfile)
     {
         var ordered = new List<string>();
-        void AddIfExists(string profile)
+        void AddIfExists(string? profile)
         {
-            if (_config.Models.ContainsKey(profile) &&
+            if (!string.IsNullOrWhiteSpace(profile) &&
+                _config.Models.ContainsKey(profile) &&
                 !ordered.Contains(profile, StringComparer.OrdinalIgnoreCase))
             {
                 ordered.Add(profile);
@@ -65,18 +66,15 @@ internal sealed class ReActProfileSelection
         }
 
         AddIfExists(requestedProfile);
-        AddIfExists("reasoning");
-        AddIfExists("fallback");
-        AddIfExists("fast");
-
-        foreach (var profile in _config.Models.Keys.OrderBy(x => x, StringComparer.OrdinalIgnoreCase))
+        foreach (var profile in _config.Runtime.ProfileFallbackOrder)
         {
             AddIfExists(profile);
         }
 
         if (ordered.Count == 0)
         {
-            throw new InvalidOperationException("No model profiles configured.");
+            throw new InvalidOperationException(
+                $"Model profile '{requestedProfile}' not found and runtime.profileFallbackOrder did not name any configured profile.");
         }
 
         return ordered;
