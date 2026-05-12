@@ -101,7 +101,7 @@ No definitely removable production code was confirmed in this audit. The remaini
 ## Mixed Responsibilities
 
 - CLI performs application behavior in `RunLocalReviewAsync` instead of delegating a shared application/runtime use case.
-- Runtime directly shapes many model recovery prompts and fallback decisions instead of delegating a step lifecycle component.
+- Runtime still shapes many model recovery prompts and fallback decisions, but session completion/error handling now lives in focused lifecycle helpers.
 - Providers both send HTTP requests and partially own model-format policy/fallback mechanics.
 - Tools own both business operation and low-level filesystem/process calls.
 - Storage handles canonical JSONL and sqlite projection in one file.

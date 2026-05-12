@@ -28,8 +28,8 @@ This plan is ordered for small, low-risk cleanup batches. Do not start feature e
 
 ## Phase 3: Agent Runtime Separation
 
-- [ ] Extract one-session lifecycle or one-step execution helpers from `ReActAgentLoop`.
-- [ ] Keep termination conditions explicit and covered by tests.
+- [x] Extract one-session lifecycle or one-step execution helpers from `ReActAgentLoop`.
+- [x] Keep termination conditions explicit and covered by tests.
 - [ ] Move deterministic recovery and path-hint scanning behind focused runtime collaborators.
 - [ ] Keep model profile switching and invalid-response thresholds behavior-compatible.
 - [ ] Preserve normalized internal message flow.

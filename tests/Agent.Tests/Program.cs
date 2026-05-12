@@ -44,6 +44,9 @@ var tests = new List<(string Name, Func<Task> Run)>
     ("ReAct loop switches profile after invalid responses", TestLoopSwitchesProfileAfterInvalidResponses),
     ("ReAct loop stops after repeated invalid output", TestLoopStopsAfterRepeatedInvalidOutput),
     ("ReAct loop stops after repeated unknown tool output", TestLoopStopsAfterRepeatedUnknownToolOutput),
+    ("ReAct loop stops after repeated final-without-tools output", TestLoopStopsAfterRepeatedFinalWithoutToolsOutput),
+    ("ReAct loop stops at max steps", TestLoopStopsAtMaxSteps),
+    ("ReAct loop returns clarify response", TestLoopClarifyResponse),
     ("ReAct loop handles final response", TestLoopFinalResponse),
     ("ReAct loop accepts plain final text for non-tool task", TestLoopAcceptsPlainFinalTextForNonToolTask),
     ("ReAct loop executes tool then final", TestLoopToolThenFinal),
@@ -531,6 +534,28 @@ static async Task TestLoopAcceptsPlainFinalTextForNonToolTask()
     Assert(result.FinalMessage.Contains("concise answer", StringComparison.OrdinalIgnoreCase), "Expected recovered plain final message.");
 }
 
+static async Task TestLoopClarifyResponse()
+{
+    var config = new AgentConfig();
+    var responses = new Queue<ModelTurnResult>();
+    responses.Enqueue(new ModelTurnResult("{\"type\":\"clarify\",\"message\":\"Which file should I inspect?\"}", "fake"));
+
+    var router = new FakeModelRouter(new FakeModelClient(responses), "fake");
+    var loop = new ReActAgentLoop(
+        router,
+        new ITool[] { new EchoTool() },
+        new DefaultPolicyEngine(config),
+        new AutoApproveService(true),
+        new InMemoryEventStore(),
+        new DefaultToolContextFactory(config, new NullSearchService()),
+        config);
+
+    var result = await loop.RunAsync(new AgentRunRequest("inspect a file", Path.GetTempPath(), "reasoning", 4), CancellationToken.None);
+    Assert(!result.Success, "Expected clarify response to end without success.");
+    Assert(result.FinalMessage.Contains("Which file", StringComparison.OrdinalIgnoreCase), "Expected clarify message to be returned.");
+    Assert(result.StepTrace.Count == 0, "Expected no tool steps for clarify response.");
+}
+
 static async Task TestLoopRetriesOnNonJsonOutput()
 {
     var config = new AgentConfig();
@@ -916,6 +941,61 @@ static async Task TestLoopStopsAfterRepeatedUnknownToolOutput()
     var result = await loop.RunAsync(new AgentRunRequest("create file test.txt", Path.GetTempPath(), "reasoning", 10), CancellationToken.None);
     Assert(!result.Success, "Expected failure after repeated unknown-tool model output.");
     Assert(result.FinalMessage.Contains("invalid model decisions", StringComparison.OrdinalIgnoreCase), "Expected unknown-tool stop message.");
+}
+
+static async Task TestLoopStopsAfterRepeatedFinalWithoutToolsOutput()
+{
+    var config = new AgentConfig
+    {
+        Runtime = new RuntimeConfig
+        {
+            MaxSteps = 6,
+            MaxConsecutiveFinalWithoutTools = 2,
+            FinalWithoutToolsBeforeProfileSwitch = 10
+        }
+    };
+
+    var responses = new Queue<ModelTurnResult>();
+    responses.Enqueue(new ModelTurnResult("{\"type\":\"final\",\"message\":\"done too early 1\"}", "fake"));
+    responses.Enqueue(new ModelTurnResult("{\"type\":\"final\",\"message\":\"done too early 2\"}", "fake"));
+
+    var router = new FakeModelRouter(new FakeModelClient(responses), "fake");
+    var loop = new ReActAgentLoop(
+        router,
+        new ITool[] { new EchoTool() },
+        new DefaultPolicyEngine(config),
+        new AutoApproveService(true),
+        new InMemoryEventStore(),
+        new DefaultToolContextFactory(config, new NullSearchService()),
+        config);
+
+    var result = await loop.RunAsync(new AgentRunRequest("create file test.txt", Path.GetTempPath(), "reasoning", 6), CancellationToken.None);
+    Assert(!result.Success, "Expected failure after repeated final-without-tools output.");
+    Assert(result.FinalMessage.Contains("final-only replies", StringComparison.OrdinalIgnoreCase), "Expected final-without-tools stop message.");
+    Assert(result.StepTrace.Count == 0, "Expected no tool steps before final-without-tools stop.");
+}
+
+static async Task TestLoopStopsAtMaxSteps()
+{
+    var config = new AgentConfig();
+    var responses = new Queue<ModelTurnResult>();
+    responses.Enqueue(new ModelTurnResult("{\"type\":\"tool\",\"tool\":\"echo\",\"reason\":\"step 1\",\"arguments\":{\"value\":\"one\"}}", "fake"));
+    responses.Enqueue(new ModelTurnResult("{\"type\":\"tool\",\"tool\":\"echo\",\"reason\":\"step 2\",\"arguments\":{\"value\":\"two\"}}", "fake"));
+
+    var router = new FakeModelRouter(new FakeModelClient(responses), "fake");
+    var loop = new ReActAgentLoop(
+        router,
+        new ITool[] { new EchoTool() },
+        new DefaultPolicyEngine(config),
+        new AutoApproveService(true),
+        new InMemoryEventStore(),
+        new DefaultToolContextFactory(config, new NullSearchService()),
+        config);
+
+    var result = await loop.RunAsync(new AgentRunRequest("run repeated checks", Path.GetTempPath(), "reasoning", 2), CancellationToken.None);
+    Assert(!result.Success, "Expected max-step exhaustion to fail.");
+    Assert(result.FinalMessage.Contains("Reached max steps (2)", StringComparison.OrdinalIgnoreCase), "Expected max-step stop message.");
+    Assert(result.StepTrace.Count == 2, "Expected each allowed step to execute before max-step stop.");
 }
 
 static async Task TestLoopSwitchesProfileAfterInvalidResponses()

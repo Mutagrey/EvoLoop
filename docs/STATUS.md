@@ -49,6 +49,8 @@
 - Completed Phase 1 inventory without runtime changes: no production code was proven dead, duplicate implementations are recorded in the architecture audit, and TUI/release docs now identify one canonical source per topic.
 - Decided to keep `release/windows` committed for now as generated artifacts for offline/GitHub delivery.
 - Completed Phase 2 contract cleanup: split `AgentContracts.cs` into focused runtime, tool, model, storage/event, config, and null implementation files without public type or behavior changes.
+- Started Phase 3 runtime separation by moving normal and fatal session completion paths from `ReActAgentLoop.RunAsync` into focused lifecycle helpers, preserving step-loop termination logic.
+- Added explicit ReAct termination tests for clarify responses, max-step exhaustion, and repeated final-without-tools replies.
 
 ## Current Problems
 
