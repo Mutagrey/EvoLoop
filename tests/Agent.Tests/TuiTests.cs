@@ -41,6 +41,11 @@ static Task TestTuiSlashCommands()
     Assert(filtered.Count == 1, "Expected /h to match one command.");
     Assert(filtered[0].Name == "/help", "Expected /h to match /help.");
 
+    var model = registry.Filter("/mo");
+    Assert(model.Count == 2, "Expected /mo to match /model and /models.");
+    Assert(model.Any(c => c.Name == "/model"), "Expected /mo to include /model.");
+    Assert(model.Any(c => c.Name == "/models"), "Expected /mo to include /models.");
+
     var help = registry.Execute("/help");
     Assert(help.Handled, "Expected /help to be handled.");
     Assert(!help.ExitRequested, "Expected /help to keep the TUI open.");

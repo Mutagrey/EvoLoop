@@ -81,6 +81,7 @@ Ordered refactor work follows `docs/architecture/refactor-plan.md`; this file re
 - Added structured TUI tool activity rendering for read, edit, search, command, explore, and failed tool completions.
 - Improved TUI transcript readability with grouped timestamped messages, role-specific colors, and a thinking/working spinner.
 - Added TUI review diff navigation commands for the latest review output.
+- Added a TUI slash-command suggestion popup with tab completion and arrow selection.
 - Added an `ollama` model provider for local `/api/chat` with `think=false`, and verified `qwen3.5:9b` through a read-only `fs_read` agent flow.
 - Raised the default ReAct step budget to 120 because JSON-ReAct fallback normally executes one tool per model turn.
 - Stopped run scripts from overriding `HOME` so user-level config such as `~/.evoloop-agent/config.json` is visible when launching `agent`.
@@ -99,4 +100,4 @@ Ordered refactor work follows `docs/architecture/refactor-plan.md`; this file re
 - Resolve the executable-project build hang in this macOS workspace and re-run the full test harness.
 - Smoke-test the self-contained Windows artifact on a restricted non-admin machine.
 - Exercise native tool calling against real corporate OpenAI-compatible gateways in all supported modes.
-- Add a TUI slash suggestion popup.
+- Add TUI session or memory inspection commands.

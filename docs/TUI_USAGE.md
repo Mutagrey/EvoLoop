@@ -58,6 +58,8 @@ dotnet run --project src/Agent.Tui --
 ## Keyboard
 
 - `Enter`: submit input.
+- `Tab`: complete the selected slash-command suggestion.
+- `Up` / `Down`: move through visible slash-command suggestions when the input starts with `/`.
 - `Ctrl+C`: close the TUI.
 - `Ctrl+D`: close the TUI when input is empty.
 

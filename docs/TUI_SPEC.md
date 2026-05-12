@@ -29,6 +29,7 @@ Implemented:
 - review diff navigation through `/diff`, `/diff files`, `/diff next`, `/diff prev`, and `/diff <number>`
 - model/profile inspection through `/model` and `/models`
 - workspace skill index inspection through `/skills`
+- slash-command suggestion popup with `Tab` completion and `Up`/`Down` selection
 
 Normal text runs through the shared agent runtime in `run` mode. `/plan <task>` runs in read-only plan mode. `/review [focus]` runs review mode and can use the local degraded review fallback when model execution is unavailable.
 
@@ -83,7 +84,7 @@ Default styling is a dark terminal palette: black background, gray text, muted c
 
 ## Next Implementation Phase
 
-Add slash suggestion popup without changing Core, Tools, Providers, or Storage ownership.
+Add session or memory inspection commands without changing Core, Tools, Providers, or Storage ownership.
 
 ## Command Roadmap
 

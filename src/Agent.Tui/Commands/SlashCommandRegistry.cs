@@ -52,7 +52,7 @@ internal sealed class SlashCommandRegistry
     }
 
     private static SlashCommand AppHandled(string name, string description, string usage)
-        => new(name, description, usage, _ => new TuiCommandResult(false, false, false, "Handled by TUI."));
+        => new(name, description, usage, _ => new TuiCommandResult(false, false, true, $"Usage: {usage}"));
 
     public IReadOnlyList<SlashCommand> Filter(string prefix)
     {

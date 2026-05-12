@@ -123,6 +123,15 @@ internal sealed class TerminalGuiTuiHost
             ColorScheme = _theme.Input
         };
 
+        var suggestions = new SlashSuggestionView(_theme)
+        {
+            X = 0,
+            Y = Pos.Bottom(transcript) - 6,
+            Width = Dim.Fill(),
+            Height = 6,
+            ColorScheme = _theme.Chrome
+        };
+
         var status = new Label(BuildStatusLine(app, 0))
         {
             X = 0,
@@ -133,6 +142,8 @@ internal sealed class TerminalGuiTuiHost
         };
 
         var spinnerFrame = 0;
+        var selectedSuggestion = 0;
+        IReadOnlyList<SlashCommand> currentSuggestions = Array.Empty<SlashCommand>();
 
         void RefreshTranscript()
         {
@@ -147,6 +158,41 @@ internal sealed class TerminalGuiTuiHost
             mode.SetNeedsDisplay();
             cwd.SetNeedsDisplay();
             status.SetNeedsDisplay();
+        }
+
+        void RefreshSuggestions()
+        {
+            var value = input.Text?.ToString() ?? string.Empty;
+            var prefix = ExtractSlashPrefix(value);
+            if (prefix is null)
+            {
+                currentSuggestions = Array.Empty<SlashCommand>();
+                selectedSuggestion = 0;
+                suggestions.SetSuggestions(currentSuggestions, selectedSuggestion);
+                return;
+            }
+
+            currentSuggestions = app.Commands.Filter(prefix).Take(5).ToArray();
+            if (selectedSuggestion >= currentSuggestions.Count)
+            {
+                selectedSuggestion = Math.Max(0, currentSuggestions.Count - 1);
+            }
+
+            suggestions.SetSuggestions(currentSuggestions, selectedSuggestion);
+        }
+
+        void CompleteSelectedSuggestion()
+        {
+            if (currentSuggestions.Count == 0)
+            {
+                return;
+            }
+
+            var command = currentSuggestions[selectedSuggestion].Name;
+            input.Text = command + " ";
+            input.CursorPosition = input.Text.RuneCount;
+            RefreshSuggestions();
+            input.SetNeedsDisplay();
         }
 
         Application.MainLoop.AddTimeout(TimeSpan.FromMilliseconds(180), _ =>
@@ -179,6 +225,7 @@ internal sealed class TerminalGuiTuiHost
             }
 
             input.Text = string.Empty;
+            RefreshSuggestions();
             RefreshTranscript();
             _ = Task.Run(async () =>
             {
@@ -193,6 +240,29 @@ internal sealed class TerminalGuiTuiHost
         input.KeyPress += args =>
         {
             var key = args.KeyEvent.Key;
+            if (key == Key.Tab && currentSuggestions.Count > 0)
+            {
+                args.Handled = true;
+                CompleteSelectedSuggestion();
+                return;
+            }
+
+            if (key == Key.CursorDown && currentSuggestions.Count > 0)
+            {
+                args.Handled = true;
+                selectedSuggestion = (selectedSuggestion + 1) % currentSuggestions.Count;
+                suggestions.SetSuggestions(currentSuggestions, selectedSuggestion);
+                return;
+            }
+
+            if (key == Key.CursorUp && currentSuggestions.Count > 0)
+            {
+                args.Handled = true;
+                selectedSuggestion = (selectedSuggestion - 1 + currentSuggestions.Count) % currentSuggestions.Count;
+                suggestions.SetSuggestions(currentSuggestions, selectedSuggestion);
+                return;
+            }
+
             if (key == Key.Enter)
             {
                 args.Handled = true;
@@ -214,6 +284,8 @@ internal sealed class TerminalGuiTuiHost
             }
         };
 
+        input.TextChanged += _ => RefreshSuggestions();
+
         top.KeyPress += args =>
         {
             var key = args.KeyEvent.Key;
@@ -231,7 +303,7 @@ internal sealed class TerminalGuiTuiHost
             }
         };
 
-        root.Add(title, profile, mode, cwdLabel, cwd, separator, transcript, prompt, input, status);
+        root.Add(title, profile, mode, cwdLabel, cwd, separator, transcript, suggestions, prompt, input, status);
         top.Add(root);
         input.SetFocus();
 
@@ -280,6 +352,18 @@ internal sealed class TerminalGuiTuiHost
         };
         var label = app.IsModelThinking ? "thinking" : "working";
         return $"{label} {frame} | {app.StatusLine}";
+    }
+
+    private static string? ExtractSlashPrefix(string value)
+    {
+        var text = value.TrimStart();
+        if (!text.StartsWith("/", StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        var first = text.Split(' ', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
+        return string.IsNullOrWhiteSpace(first) ? "/" : first;
     }
 
 }
