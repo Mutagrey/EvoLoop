@@ -6,6 +6,7 @@
     <ProjectReference Include="..\..\src\Agent.Tools\Agent.Tools.csproj" />
     <ProjectReference Include="..\..\src\Agent.Providers\Agent.Providers.csproj" />
     <ProjectReference Include="..\..\src\Agent.Storage\Agent.Storage.csproj" />
+    <ProjectReference Include="..\..\src\Agent.Tui\Agent.Tui.csproj" />
   </ItemGroup>
 
   <PropertyGroup>

@@ -6,24 +6,24 @@ The main interactive terminal surface is the separate `Agent.Tui` executable. Pu
 
 Shared startup and agent wiring live in `Agent.Hosting`. Agent execution, policy, tools, providers, and storage remain in their existing layers.
 
-## First Target
+## Current Target
 
-Current implementation target:
+Implemented:
 
 - split CLI and TUI into separate executable targets
 - keep packaged `agent.cmd` as the TUI wrapper
 - add packaged `agent-cli.cmd` as the pure CLI wrapper
 - keep the old line REPL in `Agent.Cli`
-- vendor the TUI dependency packages for later offline restore
-- do not implement the full TUI shell yet
+- vendor the TUI dependency packages for offline restore
+- minimal Terminal.Gui shell with static chat transcript, input line, status bar, `/help`, and `/exit`
 
-The current TUI executable is a placeholder that reports the workspace, profile, runtime mode, and available explicit commands.
+The current TUI shell does not run agent tasks yet. Normal input is recorded in the transcript and returns an explicit "agent integration pending" status message.
 
 ## Dependency Policy
 
 TUI dependencies must be restorable without nuget.org in normal repo restore. Packages live under `vendor/nuget`, and package versions are centralized in `Directory.Packages.props`.
 
-Prepared dependency:
+Active dependency:
 
 - `Terminal.Gui` `1.19.0`
 
@@ -44,9 +44,9 @@ dotnet run --project src/Agent.Cli -- repl
 
 Packaged Windows wrappers should map `agent.cmd` to `Agent.Tui.exe` and `agent-cli.cmd` to `Agent.Cli.exe`.
 
-## Next Implementation Phase
+## Current TUI Shell
 
-Implement a minimal TUI shell behind focused CLI classes:
+The minimal shell supports:
 
 - app start and shutdown
 - static chat screen
@@ -54,5 +54,9 @@ Implement a minimal TUI shell behind focused CLI classes:
 - status bar
 - `/help`
 - `/exit`
+- `Ctrl+C` shutdown
+- `Ctrl+D` shutdown when input is empty
 
-Do not connect the TUI to the agent runtime until the minimal shell is stable.
+## Next Implementation Phase
+
+Connect the stable shell to the existing agent runtime event flow without changing Core, Tools, Providers, or Storage ownership.

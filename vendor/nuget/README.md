@@ -2,11 +2,11 @@
 
 This folder is the repository-local NuGet feed for offline-first restore.
 
-Prepared packages:
+Packages:
 
 | Package | Version | Why | License | Transitive |
 | --- | --- | --- | --- | --- |
-| Terminal.Gui | 1.19.0 | Future fullscreen TUI framework | MIT | yes |
+| Terminal.Gui | 1.19.0 | Fullscreen TUI framework for `Agent.Tui` | MIT | yes |
 | NStack.Core | 1.1.1 | Terminal.Gui dependency | MIT | yes |
 | System.Management | 9.0.4 | Terminal.Gui dependency | MIT | yes |
 | System.CodeDom | 9.0.4 | System.Management dependency | MIT | no |

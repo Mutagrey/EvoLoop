@@ -42,6 +42,8 @@
 - Made Windows release bundle scripts regenerate `agent.cmd` wrappers.
 - Split interactive TUI and pure CLI into separate executable targets: `Agent.Tui` and `Agent.Cli`, with shared startup/runtime wiring in `Agent.Hosting`.
 - Added TUI audit docs, vendored `Terminal.Gui 1.19.0` package files, and generated current project lock files for offline restore.
+- Implemented the minimal `Agent.Tui` Terminal.Gui shell with static transcript, input line, status bar, `/help`, `/exit`, and shutdown shortcuts.
+- Added testable TUI command and transcript rendering helpers covered by the lightweight test harness.
 
 ## Current Problems
 
@@ -51,8 +53,7 @@
 - Snapshot diff output is currently optimized for the most recent mutation, not for a full multi-file workspace review baseline.
 - The committed Windows bundles remain intentionally tracked for now; this cleanup did not change the delivery model.
 - The checked-in Windows bundle binaries have not been regenerated for the new `Agent.Tui` executable yet.
-- The TUI is not implemented yet; `Agent.Tui` is only a prepared placeholder.
-- Vendored TUI packages are not referenced by a project yet, so the future minimal shell still needs the `Terminal.Gui` `PackageReference` and an updated package lock.
+- The TUI shell is not connected to agent execution yet; normal input records a pending-integration message.
 
 ## Next Improvements
 
@@ -62,4 +63,4 @@
 - Add tests for non-writable snapshot storage, undo failure recovery, and review-mode fallback behavior.
 - Exercise native tool calling against real corporate OpenAI-compatible gateways in all supported modes.
 - Remove leftover machine-specific clutter files from version control as part of a dedicated cleanup pass.
-- Implement the minimal Terminal.Gui TUI shell and generate lock files from `vendor/nuget`.
+- Connect `Agent.Tui` input to the existing agent runtime event flow after the minimal shell is stable.

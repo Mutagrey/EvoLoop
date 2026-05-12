@@ -62,9 +62,9 @@ Smoke test on target machine:
 - plain-text recovery -> `Action:` and `Arguments:` output is used only as a last-resort parser
 - failed tools -> next turn receives a structured `ToolResultMessage` with `IsError=true`
 - skills index -> `.evoloop/skills/*/SKILL.md` contributes only name/description/path until a tool reads the full file
-- `Agent.Tui` -> enters the TUI placeholder
+- `Agent.Tui` -> starts the minimal Terminal.Gui shell; `/help`, `/exit`, `Ctrl+C`, and empty-input `Ctrl+D` close or respond as expected
 - `Agent.Cli repl` -> enters the legacy line-based REPL
-- vendored TUI packages -> package files exist under `vendor/nuget`; no online-only TUI reference is required until the minimal TUI shell is implemented
+- vendored TUI packages -> package files exist under `vendor/nuget`; `Agent.Tui` restores `Terminal.Gui` from the local feed
 
 ## Notes
 

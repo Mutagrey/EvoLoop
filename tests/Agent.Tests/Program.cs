@@ -6,12 +6,17 @@ using Agent.Core;
 using Agent.Providers;
 using Agent.Storage;
 using Agent.Tools;
+using Agent.Tui;
 
 AssemblyLoadContext.Default.Resolving += ResolveFromOutput;
 
 var tests = new List<(string Name, Func<Task> Run)>
 {
     ("CLI parser defaults to REPL and preserves explicit modes", TestCliParserModes),
+    ("TUI slash commands filter and render help", TestTuiSlashCommands),
+    ("TUI app records pending-agent message", TestTuiAppRecordsPendingAgentMessage),
+    ("TUI app reports unknown slash command", TestTuiUnknownSlashCommand),
+    ("TUI transcript renderer formats roles", TestTuiTranscriptRenderer),
     ("Policy denies outside workspace", TestPolicyDeniesOutsideWorkspace),
     ("Policy denies sibling path prefix bypass", TestPolicyDeniesSiblingPrefixBypass),
     ("Policy denies exec_shell cwd outside workspace", TestPolicyDeniesExecShellCwdOutsideWorkspace),
@@ -110,6 +115,74 @@ static Task TestCliParserModes()
     Assert(run.OfflineStrict, "Expected offline strict flag.");
 
     return Task.CompletedTask;
+}
+
+static Task TestTuiSlashCommands()
+{
+    var registry = SlashCommandRegistry.CreateDefault();
+    var filtered = registry.Filter("/h");
+    Assert(filtered.Count == 1, "Expected /h to match one command.");
+    Assert(filtered[0].Name == "/help", "Expected /h to match /help.");
+
+    var help = registry.Execute("/help");
+    Assert(help.Handled, "Expected /help to be handled.");
+    Assert(!help.ExitRequested, "Expected /help to keep the TUI open.");
+    Assert(help.Message.Contains("/exit", StringComparison.Ordinal), "Expected help to list /exit.");
+    Assert(help.Message.Contains("agent integration pending", StringComparison.OrdinalIgnoreCase), "Expected help to state current limitation.");
+    return Task.CompletedTask;
+}
+
+static Task TestTuiAppRecordsPendingAgentMessage()
+{
+    var app = CreateTestTuiApp();
+    var result = app.Submit("inspect project");
+
+    Assert(result.Handled, "Expected normal input to be handled.");
+    Assert(!result.ExitRequested, "Expected normal input to keep TUI open.");
+    Assert(app.Messages.Any(m => m.Role == TuiMessageRole.User && m.Content == "inspect project"), "Expected user message in transcript.");
+    Assert(app.Messages.Any(m => m.Content.Contains("Agent integration pending", StringComparison.Ordinal)), "Expected pending integration notice.");
+    return Task.CompletedTask;
+}
+
+static Task TestTuiUnknownSlashCommand()
+{
+    var app = CreateTestTuiApp();
+    var result = app.Submit("/missing");
+
+    Assert(!result.Handled, "Expected unknown command to be unhandled.");
+    Assert(result.IsError, "Expected unknown command to return an error.");
+    Assert(app.Messages.Last().Role == TuiMessageRole.Error, "Expected unknown command to append an error message.");
+    Assert(app.Messages.Last().Content.Contains("Unknown command", StringComparison.Ordinal), "Expected unknown command details.");
+    return Task.CompletedTask;
+}
+
+static Task TestTuiTranscriptRenderer()
+{
+    var rendered = TranscriptRenderer.Render(new[]
+    {
+        TuiMessage.User("hello"),
+        TuiMessage.System("agent integration pending")
+    }, 60);
+
+    Assert(rendered.Contains("[user] hello", StringComparison.Ordinal), "Expected user role prefix.");
+    Assert(rendered.Contains("[system] agent integration pending", StringComparison.Ordinal), "Expected system role prefix.");
+    return Task.CompletedTask;
+}
+
+static TuiApp CreateTestTuiApp()
+{
+    return new TuiApp(
+        new TuiRuntimeInfo(
+            "/repo",
+            "/repo",
+            "reasoning",
+            "local-only degraded",
+            "model unavailable",
+            ApprovalPolicyMode.WorkspaceWrite.ToString(),
+            false,
+            true,
+            false),
+        SlashCommandRegistry.CreateDefault());
 }
 
 static Task TestPolicyDeniesOutsideWorkspace()

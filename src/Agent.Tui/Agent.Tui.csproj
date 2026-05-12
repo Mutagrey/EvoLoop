@@ -2,6 +2,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Agent.Hosting\Agent.Hosting.csproj" />
+    <PackageReference Include="Terminal.Gui" />
   </ItemGroup>
 
   <PropertyGroup>

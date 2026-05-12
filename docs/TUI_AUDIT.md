@@ -10,7 +10,8 @@
 - Sessions: `HybridEventStore`, JSONL event log, and workspace memory under `.evoloop/storage` when writable.
 - Streaming/process visibility: `IAgentRunObserver` emits typed `AgentRunEvent` values; CLI currently renders them through `SpinnerObserver`.
 - Approval flow: `ConsoleApprovalService` implements `IApprovalService` for the current console UI.
-- Existing CLI rendering: custom `AnsiRenderer`; no project references `Terminal.Gui` yet.
+- Existing CLI rendering: custom `AnsiRenderer`.
+- Existing TUI rendering: minimal `Agent.Tui` shell uses `Terminal.Gui`; testable command/transcript logic stays independent of Terminal.Gui.
 
 ## Minimal Integration Path
 
@@ -20,6 +21,7 @@
 - Preserve explicit pure CLI commands: `doctor`, `run`, `plan`, `review`, and `repl` in `Agent.Cli`.
 - Keep shared runtime wiring in `Agent.Hosting`.
 - Do not expose Terminal.Gui types to `Agent.Core`, `Agent.Tools`, `Agent.Providers`, or `Agent.Storage`.
+- Connect the next TUI phase through existing `IAgentRunObserver` and `IApprovalService` boundaries instead of moving policy/runtime behavior into the UI.
 
 ## Layer Ownership
 
