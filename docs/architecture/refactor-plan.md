@@ -58,26 +58,26 @@ This plan is ordered for small, low-risk cleanup batches. Do not start feature e
 
 ## Phase 6: Prompt And Skill Cleanup
 
-- [ ] Keep `DefaultPromptBuilder` and `DefaultContextBuilder` behavior stable until runtime split is safer.
-- [ ] When prompt edits are needed, move prompt fragments into focused renderer/template files.
-- [ ] Keep AGENTS/source-of-truth loading centralized.
-- [ ] Keep skill progressive disclosure: index first, full `SKILL.md` only after tool read.
+- [x] Keep `DefaultPromptBuilder` and `DefaultContextBuilder` behavior stable until runtime split is safer.
+- [x] No prompt text edits were needed; prompt builder remains unchanged.
+- [x] Keep AGENTS/source-of-truth loading centralized.
+- [x] Keep skill progressive disclosure: index first, full `SKILL.md` only after tool read.
 
 ## Phase 7: Storage And Session Cleanup
 
-- [ ] Separate JSONL canonical stores from sqlite projection code if the file keeps growing.
-- [ ] Preserve JSONL field compatibility.
-- [ ] Define event type names in one place.
-- [ ] Keep memory project identity best-effort and tolerant of non-writable storage.
-- [ ] Prepare future session-tree support as a consumer of the event stream, not a replacement for JSONL.
+- [x] Separate JSONL canonical stores from sqlite projection code if the file keeps growing.
+- [x] Preserve JSONL field compatibility.
+- [x] Define event type names in one place.
+- [x] Keep memory project identity best-effort and tolerant of non-writable storage.
+- [x] Prepare future session-tree support as a consumer of the event stream, not a replacement for JSONL.
 
 ## Phase 8: UI/TUI Boundary Cleanup
 
-- [ ] Move CLI local degraded review fallback out of `CliSession` into a shared application/hosting service.
-- [ ] Keep CLI rendering in CLI and Terminal.Gui rendering in TUI.
+- [x] Move CLI local degraded review fallback out of `CliSession` into a shared application/hosting service.
+- [x] Keep CLI rendering in CLI and Terminal.Gui rendering in TUI.
 - [ ] Add a TUI runtime observer and approval implementation only after event data is structured enough.
-- [ ] Do not make `Agent.Tui` depend on `Agent.Cli`.
-- [ ] Do not move Terminal.Gui types outside `Agent.Tui`.
+- [x] Do not make `Agent.Tui` depend on `Agent.Cli`.
+- [x] Do not move Terminal.Gui types outside `Agent.Tui`.
 
 ## Phase 9: Tests And Safety Checks
 

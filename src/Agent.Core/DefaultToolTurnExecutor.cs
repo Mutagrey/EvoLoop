@@ -19,7 +19,7 @@ internal sealed class DefaultToolTurnExecutor : IToolTurnExecutor
 
             await request.Context.EventLog.AppendAsync(new AgentEventRecord(
                 request.Context.SessionId,
-                "policy_denied",
+                AgentEventTypes.PolicyDenied,
                 DateTimeOffset.UtcNow,
                 policyDecision.Reason,
                 request.Tool.Name,
@@ -38,7 +38,7 @@ internal sealed class DefaultToolTurnExecutor : IToolTurnExecutor
 
             await request.Context.EventLog.AppendAsync(new AgentEventRecord(
                 request.Context.SessionId,
-                "approval_request",
+                AgentEventTypes.ApprovalRequest,
                 DateTimeOffset.UtcNow,
                 policyDecision.Reason,
                 request.Tool.Name,
@@ -51,7 +51,7 @@ internal sealed class DefaultToolTurnExecutor : IToolTurnExecutor
 
             await request.Context.EventLog.AppendAsync(new AgentEventRecord(
                 request.Context.SessionId,
-                "approval_result",
+                AgentEventTypes.ApprovalResult,
                 DateTimeOffset.UtcNow,
                 approved ? "approved" : "rejected",
                 request.Tool.Name,
@@ -83,7 +83,7 @@ internal sealed class DefaultToolTurnExecutor : IToolTurnExecutor
 
         await request.Context.EventLog.AppendAsync(new AgentEventRecord(
             request.Context.SessionId,
-            "tool_call",
+            AgentEventTypes.ToolCall,
             DateTimeOffset.UtcNow,
             request.Call.Reason,
             request.Tool.Name,
@@ -126,7 +126,7 @@ internal sealed class DefaultToolTurnExecutor : IToolTurnExecutor
         await request.EventStore.AppendStepAsync(stepRecord, ct);
         await request.Context.EventLog.AppendAsync(new AgentEventRecord(
             request.Context.SessionId,
-            "tool_result",
+            AgentEventTypes.ToolResult,
             DateTimeOffset.UtcNow,
             result.Message,
             request.Tool.Name,

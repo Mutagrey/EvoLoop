@@ -1,6 +1,6 @@
 using System.Text;
 using Agent.Core;
-using Agent.Providers;
+using Agent.Hosting;
 using Agent.Tools;
 
 namespace Agent.Cli;
@@ -8,9 +8,9 @@ namespace Agent.Cli;
 internal static class CliSession
 {
     public static async Task RunReplAsync(
-        IAgentLoop loop,
         IReadOnlyList<ITool> tools,
         AnsiRenderer renderer,
+        AgentTaskRunner taskRunner,
         AgentConfig config,
         string workspace,
         string profile,
@@ -69,7 +69,7 @@ internal static class CliSession
                 }
 
                 await commandHistory.AddAsync(task, CancellationToken.None);
-                lastRun = await RunTaskAsync(loop, renderer, task, workspace, profile, capabilities, AgentExecutionMode.Run, config.Safety.DefaultApprovalMode, patchService);
+                lastRun = await RunTaskAsync(taskRunner, renderer, task, workspace, profile, capabilities, AgentExecutionMode.Run, config.Safety.DefaultApprovalMode);
                 continue;
             }
 
@@ -83,7 +83,7 @@ internal static class CliSession
                 }
 
                 await commandHistory.AddAsync(input, CancellationToken.None);
-                lastPlan = await RunTaskAsync(loop, renderer, task, workspace, profile, capabilities, AgentExecutionMode.Plan, ApprovalPolicyMode.ReadOnly, patchService);
+                lastPlan = await RunTaskAsync(taskRunner, renderer, task, workspace, profile, capabilities, AgentExecutionMode.Plan, ApprovalPolicyMode.ReadOnly);
                 continue;
             }
 
@@ -103,7 +103,7 @@ internal static class CliSession
             if (input.StartsWith("/review", StringComparison.OrdinalIgnoreCase))
             {
                 var suffix = input.Length > 7 ? input[7..].Trim() : null;
-                lastRun = await RunTaskAsync(loop, renderer, BuildReviewTask(suffix), workspace, profile, capabilities, AgentExecutionMode.Review, ApprovalPolicyMode.ReadOnly, patchService);
+                lastRun = await RunTaskAsync(taskRunner, renderer, AgentTaskRunner.BuildReviewTask(suffix), workspace, profile, capabilities, AgentExecutionMode.Review, ApprovalPolicyMode.ReadOnly);
                 continue;
             }
 
@@ -205,28 +205,29 @@ internal static class CliSession
             }
 
             await commandHistory.AddAsync(input, CancellationToken.None);
-            lastRun = await RunTaskAsync(loop, renderer, input, workspace, profile, capabilities, AgentExecutionMode.Run, config.Safety.DefaultApprovalMode, patchService);
+            lastRun = await RunTaskAsync(taskRunner, renderer, input, workspace, profile, capabilities, AgentExecutionMode.Run, config.Safety.DefaultApprovalMode);
         }
 
         renderer.WriteInfo("Goodbye.");
     }
 
     public static async Task<AgentRunResult> RunTaskAsync(
-        IAgentLoop loop,
+        AgentTaskRunner taskRunner,
         AnsiRenderer renderer,
         string task,
         string workspace,
         string profile,
         RuntimeCapabilities capabilities,
         AgentExecutionMode executionMode,
-        ApprovalPolicyMode approvalMode,
-        IPatchService patchService)
+        ApprovalPolicyMode approvalMode)
     {
         if (!capabilities.CanRunAgentTasks)
         {
             if (executionMode == AgentExecutionMode.Review)
             {
-                return await RunLocalReviewAsync(renderer, workspace, capabilities, patchService);
+                var review = await taskRunner.RunAsync(task, profile, executionMode, approvalMode, null, CancellationToken.None);
+                renderer.WritePanel("Review", review.LocalReviewSummary ?? review.Result.FinalMessage);
+                return review.Result;
             }
 
             renderer.WriteError(
@@ -244,15 +245,8 @@ internal static class CliSession
 
         renderer.WritePanel("Task", task);
 
-        var result = await loop.RunAsync(new AgentRunRequest(
-            task,
-            workspace,
-            profile,
-            executionMode,
-            approvalMode,
-            null,
-            observer),
-            CancellationToken.None);
+        var outcome = await taskRunner.RunAsync(task, profile, executionMode, approvalMode, observer, CancellationToken.None);
+        var result = outcome.Result;
 
         await observer.WriteActivitySummaryAsync(workspace, CancellationToken.None);
 
@@ -262,58 +256,6 @@ internal static class CliSession
 
         return result;
     }
-
-    public static string BuildReviewTask(string? suffix)
-    {
-        const string baseTask = "Review current workspace changes. Prefer git_diff if git is available; otherwise use workspace_snapshot_diff. Prioritize bugs, regressions, risky behavior changes, and missing tests.";
-        return string.IsNullOrWhiteSpace(suffix) ? baseTask : baseTask + "\nFocus: " + suffix.Trim();
-    }
-
-    private static async Task<AgentRunResult> RunLocalReviewAsync(
-        AnsiRenderer renderer,
-        string workspace,
-        RuntimeCapabilities capabilities,
-        IPatchService patchService)
-    {
-        var summary = new StringBuilder();
-        if (capabilities.GitAvailable)
-        {
-            var status = await ProcessRunner.RunAsync("git", new[] { "status", "--short", "--branch" }, workspace, CancellationToken.None, 32 * 1024);
-            var diff = await ProcessRunner.RunAsync("git", new[] { "diff", "--stat" }, workspace, CancellationToken.None, 32 * 1024);
-            summary.AppendLine("git status:");
-            summary.AppendLine(string.IsNullOrWhiteSpace(status.StdOut) ? "<empty>" : status.StdOut.Trim());
-            summary.AppendLine();
-            summary.AppendLine("git diff --stat:");
-            summary.AppendLine(string.IsNullOrWhiteSpace(diff.StdOut) ? "<empty>" : diff.StdOut.Trim());
-        }
-        else
-        {
-            var snapshotResult = await new WorkspaceSnapshotDiffTool().ExecuteAsync(
-                new ToolCall("workspace_snapshot_diff", default, "local review"),
-                new ToolContext(
-                    workspace,
-                    "local-review",
-                    "review",
-                    AgentExecutionMode.Review,
-                    ApprovalPolicyMode.ReadOnly,
-                    new AgentConfig(),
-                    new HybridSearchService(new DisabledModelClientRouter("disabled"), new AgentConfig(), workspace),
-                    capabilities,
-                    patchService,
-                    NullEventLog.Instance),
-                CancellationToken.None);
-
-            summary.AppendLine(snapshotResult.Message);
-            if (!string.IsNullOrWhiteSpace(snapshotResult.StdOut))
-            {
-                summary.AppendLine(snapshotResult.StdOut);
-            }
-        }
-
-        renderer.WritePanel("Review", summary.ToString().TrimEnd());
-        return new AgentRunResult(true, "Local review summary generated without model execution.", 0, "local-review", Array.Empty<SessionStep>());
-    }
-
     private static string FormatConfig(AgentConfig config)
     {
         var configPath = AgentConfigLoader.GetDefaultConfigPath();

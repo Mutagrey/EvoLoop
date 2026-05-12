@@ -215,7 +215,7 @@ public sealed class WorkspacePatchService : IPatchService
     {
         await context.EventLog.AppendAsync(new AgentEventRecord(
             context.SessionId,
-            "file_mutation",
+            AgentEventTypes.FileMutation,
             DateTimeOffset.UtcNow,
             mutationType,
             null,

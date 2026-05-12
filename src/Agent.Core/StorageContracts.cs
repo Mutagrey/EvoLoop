@@ -54,3 +54,17 @@ public sealed record AgentEventRecord(
     string? ToolName = null,
     bool? Success = null,
     IReadOnlyDictionary<string, string>? Data = null);
+
+public static class AgentEventTypes
+{
+    public const string SessionStart = "session_start";
+    public const string SessionEnd = "session_end";
+    public const string FinalAnswer = "final_answer";
+    public const string LlmRequest = "llm_request";
+    public const string PolicyDenied = "policy_denied";
+    public const string ApprovalRequest = "approval_request";
+    public const string ApprovalResult = "approval_result";
+    public const string ToolCall = "tool_call";
+    public const string ToolResult = "tool_result";
+    public const string FileMutation = "file_mutation";
+}

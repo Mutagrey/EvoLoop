@@ -57,6 +57,9 @@
 - Completed Phase 3 runtime separation with centralized normalized message-history append helpers for user, assistant, and tool-result turns.
 - Completed Phase 4 tool cleanup: kept `ToolCatalog.CreateDefaultTools()` as the default registry path, centralized workspace scan skip rules, centralized mutation snapshot manifests, and added structured tool activity metadata for UI/event consumers.
 - Completed Phase 5 LLM adapter cleanup: provider fallback helpers now live in `ModelClientBase`, OpenAI/custom gateway request compatibility is covered by focused provider payload tests, and native tool-call behavior remains unchanged.
+- Completed Phase 6 prompt and skill cleanup without prompt behavior changes: source-of-truth doc loading and progressive skill indexing now live in focused context helpers.
+- Completed Phase 7 storage/session cleanup: split canonical JSONL stores from the SQLite projection, centralized event type names, and documented JSONL as the source for future session-tree views.
+- Started Phase 8 UI/TUI boundary cleanup by moving local degraded review fallback into `Agent.Hosting` while keeping rendering in CLI/TUI-specific layers.
 
 ## Current Problems
 

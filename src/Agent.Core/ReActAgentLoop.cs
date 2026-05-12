@@ -71,7 +71,7 @@ public sealed partial class ReActAgentLoop : IAgentLoop
             request.ApprovalMode);
         await context.EventLog.AppendAsync(new AgentEventRecord(
             session.SessionId,
-            "session_start",
+            AgentEventTypes.SessionStart,
             DateTimeOffset.UtcNow,
             request.Task,
             null,
@@ -173,7 +173,7 @@ public sealed partial class ReActAgentLoop : IAgentLoop
 
                     await context.EventLog.AppendAsync(new AgentEventRecord(
                         session.SessionId,
-                        "llm_request",
+                        AgentEventTypes.LlmRequest,
                         DateTimeOffset.UtcNow,
                         $"profile={currentProfileName}; step={step}",
                         null,

@@ -33,10 +33,11 @@ public static class Program
                 return await RunSingleTurnAsync(host, context, renderer, command);
             }
 
+            var taskRunner = new AgentTaskRunner(host, context);
             await CliSession.RunReplAsync(
-                host.Loop,
                 host.Tools,
                 renderer,
+                taskRunner,
                 context.Config,
                 context.Workspace,
                 command.Profile,
@@ -59,7 +60,7 @@ public static class Program
         CliArguments command)
     {
         var task = command.Mode == CliMode.Review
-            ? CliSession.BuildReviewTask(command.Task)
+            ? AgentTaskRunner.BuildReviewTask(command.Task)
             : command.Task;
         if (string.IsNullOrWhiteSpace(task))
         {
@@ -67,8 +68,9 @@ public static class Program
             return 2;
         }
 
+        var taskRunner = new AgentTaskRunner(host, context);
         var result = await CliSession.RunTaskAsync(
-            host.Loop,
+            taskRunner,
             renderer,
             task,
             context.Workspace,
@@ -80,8 +82,7 @@ public static class Program
                 CliMode.Review => AgentExecutionMode.Review,
                 _ => AgentExecutionMode.Run
             },
-            context.Config.Safety.DefaultApprovalMode,
-            host.PatchService);
+            context.Config.Safety.DefaultApprovalMode);
         return result.Success ? 0 : 1;
     }
 }

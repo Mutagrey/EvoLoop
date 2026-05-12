@@ -4,14 +4,6 @@ namespace Agent.Core;
 
 internal sealed class DefaultContextBuilder : IContextBuilder
 {
-    private static readonly string[] SourceOfTruthPaths =
-    {
-        "AGENTS.md",
-        "docs/ARCHITECTURE.md",
-        "docs/OPERATING-MODES.md",
-        "docs/STATUS.md"
-    };
-
     public async Task<IReadOnlyList<ModelMessage>> BuildInitialMessagesAsync(
         AgentRunRequest request,
         ToolContext context,
@@ -20,13 +12,13 @@ internal sealed class DefaultContextBuilder : IContextBuilder
     {
         var messages = new List<ModelMessage>();
 
-        var docs = await BuildProjectInstructionMessageAsync(request.WorkspaceRoot, context.Config.Runtime.ContextProjectDocMaxChars, ct);
+        var docs = await ProjectSourceOfTruth.BuildMessageAsync(request.WorkspaceRoot, context.Config.Runtime.ContextProjectDocMaxChars, ct);
         if (!string.IsNullOrWhiteSpace(docs))
         {
             messages.Add(new ModelMessage("user", docs));
         }
 
-        var skillIndex = await BuildSkillIndexMessageAsync(request.WorkspaceRoot, context.Config.Runtime.ContextProjectDocMaxChars / 3, ct);
+        var skillIndex = await SkillIndexBuilder.BuildMessageAsync(request.WorkspaceRoot, context.Config.Runtime.ContextProjectDocMaxChars / 3, ct);
         if (!string.IsNullOrWhiteSpace(skillIndex))
         {
             messages.Add(new ModelMessage("user", skillIndex));
@@ -51,130 +43,6 @@ internal sealed class DefaultContextBuilder : IContextBuilder
         }
 
         return messages;
-    }
-
-    private static async Task<string> BuildProjectInstructionMessageAsync(string workspaceRoot, int maxChars, CancellationToken ct)
-    {
-        var sb = new StringBuilder();
-        sb.AppendLine("PROJECT INSTRUCTIONS AND SOURCE-OF-TRUTH DOCS:");
-
-        foreach (var relativePath in SourceOfTruthPaths)
-        {
-            var fullPath = Path.Combine(workspaceRoot, relativePath.Replace('/', Path.DirectorySeparatorChar));
-            if (!File.Exists(fullPath))
-            {
-                continue;
-            }
-
-            var content = await File.ReadAllTextAsync(fullPath, ct);
-            content = Clip(content.Trim(), Math.Max(300, maxChars / SourceOfTruthPaths.Length));
-            if (string.IsNullOrWhiteSpace(content))
-            {
-                continue;
-            }
-
-            sb.AppendLine($"FILE: {relativePath}");
-            sb.AppendLine(content);
-            sb.AppendLine();
-
-            if (sb.Length >= maxChars)
-            {
-                break;
-            }
-        }
-
-        return Clip(sb.ToString().TrimEnd(), maxChars);
-    }
-
-    private static async Task<string> BuildSkillIndexMessageAsync(string workspaceRoot, int maxChars, CancellationToken ct)
-    {
-        var skillsRoot = Path.Combine(workspaceRoot, ".evoloop", "skills");
-        if (!Directory.Exists(skillsRoot))
-        {
-            return string.Empty;
-        }
-
-        var skillFiles = Directory
-            .EnumerateFiles(skillsRoot, "SKILL.md", SearchOption.AllDirectories)
-            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
-            .Take(50)
-            .ToArray();
-
-        if (skillFiles.Length == 0)
-        {
-            return string.Empty;
-        }
-
-        var sb = new StringBuilder();
-        sb.AppendLine("SKILLS INDEX (progressive disclosure):");
-        sb.AppendLine("Only the index is loaded. Use fs_read on the listed SKILL.md path before applying a skill.");
-
-        foreach (var file in skillFiles)
-        {
-            ct.ThrowIfCancellationRequested();
-            string content;
-            try
-            {
-                content = await File.ReadAllTextAsync(file, ct);
-            }
-            catch
-            {
-                continue;
-            }
-
-            var relative = Path.GetRelativePath(workspaceRoot, file).Replace(Path.DirectorySeparatorChar, '/');
-            var name = ExtractSkillName(content, Path.GetFileName(Path.GetDirectoryName(file)) ?? "skill");
-            var description = ExtractSkillDescription(content);
-            sb.Append("- ").Append(name).Append(": ");
-            sb.Append(string.IsNullOrWhiteSpace(description) ? "No description provided." : description);
-            sb.Append(" (path: ").Append(relative).AppendLine(")");
-
-            if (sb.Length >= maxChars)
-            {
-                break;
-            }
-        }
-
-        return Clip(sb.ToString().TrimEnd(), maxChars);
-    }
-
-    private static string ExtractSkillName(string content, string fallback)
-    {
-        foreach (var line in content.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
-        {
-            var trimmed = line.Trim();
-            if (trimmed.StartsWith("#", StringComparison.Ordinal))
-            {
-                var name = trimmed.TrimStart('#').Trim();
-                return string.IsNullOrWhiteSpace(name) ? fallback : ClipLine(name, 80);
-            }
-        }
-
-        return fallback;
-    }
-
-    private static string ExtractSkillDescription(string content)
-    {
-        foreach (var line in content.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
-        {
-            var trimmed = line.Trim();
-            if (trimmed.StartsWith("#", StringComparison.Ordinal))
-            {
-                continue;
-            }
-
-            if (trimmed.StartsWith("description:", StringComparison.OrdinalIgnoreCase))
-            {
-                return ClipLine(trimmed["description:".Length..].Trim(), 220);
-            }
-
-            if (!string.IsNullOrWhiteSpace(trimmed))
-            {
-                return ClipLine(trimmed, 220);
-            }
-        }
-
-        return string.Empty;
     }
 
     private static string BuildRuntimeContextMessage(ToolContext context)
@@ -205,21 +73,5 @@ internal sealed class DefaultContextBuilder : IContextBuilder
             AgentExecutionMode.Review => "EXECUTION FRAME: Review mode. Inspect current changes, prioritize risks and regressions, and do not mutate the workspace.",
             _ => string.Empty
         };
-    }
-
-    private static string Clip(string value, int maxChars)
-    {
-        if (string.IsNullOrEmpty(value) || value.Length <= maxChars)
-        {
-            return value;
-        }
-
-        return value[..Math.Max(0, maxChars - 14)] + "\n[truncated]";
-    }
-
-    private static string ClipLine(string value, int maxChars)
-    {
-        var oneLine = value.Replace('\r', ' ').Replace('\n', ' ').Trim();
-        return oneLine.Length <= maxChars ? oneLine : oneLine[..Math.Max(0, maxChars - 3)] + "...";
     }
 }

@@ -45,14 +45,14 @@ public sealed partial class ReActAgentLoop
 
         await context.EventLog.AppendAsync(new AgentEventRecord(
             session.SessionId,
-            "final_answer",
+            AgentEventTypes.FinalAnswer,
             DateTimeOffset.UtcNow,
             finalMessage,
             null,
             success), ct);
         await context.EventLog.AppendAsync(new AgentEventRecord(
             session.SessionId,
-            "session_end",
+            AgentEventTypes.SessionEnd,
             DateTimeOffset.UtcNow,
             success ? "completed" : "incomplete",
             null,
@@ -71,7 +71,7 @@ public sealed partial class ReActAgentLoop
         await _eventStore.CompleteSessionAsync(session.SessionId, "error", ct);
         await context.EventLog.AppendAsync(new AgentEventRecord(
             session.SessionId,
-            "session_end",
+            AgentEventTypes.SessionEnd,
             DateTimeOffset.UtcNow,
             ex.Message,
             null,

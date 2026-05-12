@@ -150,6 +150,7 @@ Native tool support is never assumed. Provider-specific payloads and parsing sta
 - Session steps still persist for run history.
 - Typed JSONL events also persist under `.evoloop/storage/events.jsonl`.
 - Event log records include session start/end, model requests, tool calls, tool results, approvals, file mutations, and final answer.
+- Future session-tree views should consume the JSONL event stream; they must not replace it as the canonical record.
 
 ## Skills
 
