@@ -50,12 +50,57 @@ internal static class TuiRuntimeEventFormatter
     private static string FormatToolCompletion(AgentRunEvent evt)
     {
         var tool = string.IsNullOrWhiteSpace(evt.ToolName) ? "tool" : evt.ToolName;
-        var success = evt.Metadata is not null &&
+        var success = IsSuccess(evt);
+        var summary = TryGetMetadata(evt.Metadata, ToolActivityMetadata.SummaryKey);
+
+        if (!success)
+        {
+            return $"failed: {tool} - {ToOneLine(summary ?? evt.Message, 180)}";
+        }
+
+        var kind = TryGetMetadata(evt.Metadata, ToolActivityMetadata.KindKey);
+        return kind switch
+        {
+            "read" => FormatSubject("read", TryGetMetadata(evt.Metadata, ToolActivityMetadata.PathKey), tool, summary, evt.Message),
+            "edit" => FormatSubject("edit", TryGetMetadata(evt.Metadata, ToolActivityMetadata.PathKey), tool, summary, evt.Message),
+            "explore" => FormatSubject("list", TryGetMetadata(evt.Metadata, ToolActivityMetadata.PathKey), tool, summary, evt.Message),
+            "search" => FormatSubject("search", Quote(TryGetMetadata(evt.Metadata, ToolActivityMetadata.QueryKey)), tool, summary, evt.Message),
+            "command" => FormatSubject("command", TryGetMetadata(evt.Metadata, ToolActivityMetadata.CommandKey), tool, summary, evt.Message),
+            _ => $"ok: {tool} - {ToOneLine(summary ?? evt.Message, 180)}"
+        };
+    }
+
+    private static string FormatSubject(string label, string? subject, string tool, string? summary, string message)
+    {
+        if (!string.IsNullOrWhiteSpace(subject))
+        {
+            return $"{label}: {ToOneLine(subject, 160)} ({tool})";
+        }
+
+        return $"{label}: {tool} - {ToOneLine(summary ?? message, 180)}";
+    }
+
+    private static bool IsSuccess(AgentRunEvent evt)
+    {
+        if (evt.Metadata is not null &&
             evt.Metadata.TryGetValue(ToolActivityMetadata.SuccessKey, out var value) &&
-            bool.TryParse(value, out var parsed)
-                ? parsed
-                : !evt.Message.Contains("failed", StringComparison.OrdinalIgnoreCase);
-        var label = success ? "ok" : "failed";
-        return $"{label}: {tool} - {evt.Message}";
+            bool.TryParse(value, out var parsed))
+        {
+            return parsed;
+        }
+
+        return !evt.Message.Contains("failed", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string? TryGetMetadata(IReadOnlyDictionary<string, string>? metadata, string key)
+        => metadata is not null && metadata.TryGetValue(key, out var value) ? value : null;
+
+    private static string? Quote(string? value)
+        => string.IsNullOrWhiteSpace(value) ? null : $"\"{value}\"";
+
+    private static string ToOneLine(string value, int maxLength)
+    {
+        var oneLine = value.Replace('\r', ' ').Replace('\n', ' ').Trim();
+        return oneLine.Length <= maxLength ? oneLine : oneLine[..maxLength] + "...";
     }
 }

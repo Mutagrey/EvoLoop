@@ -41,11 +41,11 @@ internal sealed class TerminalGuiTuiHost
             ColorScheme = _theme.TopLevel
         };
 
-        var title = new Label("EvoLoop")
+        var title = new Label("EvoLoop Agent")
         {
             X = 0,
             Y = 0,
-            Width = 8,
+            Width = 13,
             Height = 1,
             ColorScheme = _theme.Title
         };
@@ -95,17 +95,15 @@ internal sealed class TerminalGuiTuiHost
             ColorScheme = _theme.Muted
         };
 
-        var transcript = new TextView
+        var transcript = new TranscriptView(_theme)
         {
             X = 0,
             Y = 3,
             Width = Dim.Fill(),
             Height = Dim.Fill(4),
-            ReadOnly = true,
-            WordWrap = true,
-            Text = app.Transcript(SafeConsoleWidth()),
             ColorScheme = _theme.Transcript
         };
+        transcript.SetMessages(app.Messages);
 
         var prompt = new Label(">")
         {
@@ -125,7 +123,7 @@ internal sealed class TerminalGuiTuiHost
             ColorScheme = _theme.Input
         };
 
-        var status = new Label(app.StatusLine)
+        var status = new Label(BuildStatusLine(app, 0))
         {
             X = 0,
             Y = Pos.AnchorEnd(1),
@@ -134,20 +132,35 @@ internal sealed class TerminalGuiTuiHost
             ColorScheme = _theme.Status
         };
 
+        var spinnerFrame = 0;
+
         void RefreshTranscript()
         {
-            transcript.Text = app.Transcript(SafeConsoleWidth());
+            transcript.SetMessages(app.Messages);
             profile.Text = $"model profile {app.Runtime.Profile}";
             mode.Text = $"mode {app.Runtime.ModeLabel}";
             cwd.Text = app.Runtime.Workspace;
-            status.Text = app.StatusLine;
-            transcript.MoveEnd();
+            status.Text = BuildStatusLine(app, spinnerFrame);
+            status.ColorScheme = app.IsModelThinking ? _theme.Thinking : _theme.Status;
             transcript.SetNeedsDisplay();
             profile.SetNeedsDisplay();
             mode.SetNeedsDisplay();
             cwd.SetNeedsDisplay();
             status.SetNeedsDisplay();
         }
+
+        Application.MainLoop.AddTimeout(TimeSpan.FromMilliseconds(180), _ =>
+        {
+            if (app.IsTaskRunning)
+            {
+                spinnerFrame++;
+                status.Text = BuildStatusLine(app, spinnerFrame);
+                status.ColorScheme = app.IsModelThinking ? _theme.Thinking : _theme.Status;
+                status.SetNeedsDisplay();
+            }
+
+            return true;
+        });
 
         app.Changed += () => Application.MainLoop.Invoke(RefreshTranscript);
         app.AttachApprovalPrompt(ShowApprovalDialogAsync);
@@ -249,6 +262,24 @@ internal sealed class TerminalGuiTuiHost
         {
             return 100;
         }
+    }
+
+    private static string BuildStatusLine(TuiApp app, int spinnerFrame)
+    {
+        if (!app.IsTaskRunning)
+        {
+            return app.StatusLine;
+        }
+
+        var frame = (spinnerFrame % 4) switch
+        {
+            0 => "|",
+            1 => "/",
+            2 => "-",
+            _ => "\\"
+        };
+        var label = app.IsModelThinking ? "thinking" : "working";
+        return $"{label} {frame} | {app.StatusLine}";
     }
 
 }

@@ -28,7 +28,7 @@ static Task TestConfigLoaderCreatesDefaultConfigAtCustomPath()
 
         Assert(File.Exists(configPath), "Expected missing custom config to be created.");
         Assert(config.Models.ContainsKey("reasoning"), "Expected default reasoning model profile.");
-        Assert(config.Safety.DefaultApprovalMode == ApprovalPolicyMode.WorkspaceWrite, "Expected default approval mode.");
+        Assert(config.Safety.DefaultApprovalMode == ApprovalPolicyMode.AutoEdit, "Expected default approval mode.");
         return Task.CompletedTask;
     }
     finally

@@ -12,6 +12,7 @@ internal sealed class TuiApp
     private AgentRunResult? _lastRun;
     private AgentRunResult? _lastPlan;
     private bool _taskRunning;
+    private bool _modelThinking;
     private Func<ApprovalRequest, CancellationToken, Task<bool>>? _approvalPrompt;
     private Func<CancellationToken, Task<TuiRuntimeInfo>>? _configReload;
     private IConfigFileOpener _configFileOpener = new DefaultConfigFileOpener();
@@ -38,6 +39,27 @@ internal sealed class TuiApp
     }
 
     public bool ExitRequested { get; private set; }
+    public bool IsTaskRunning
+    {
+        get
+        {
+            lock (_sync)
+            {
+                return _taskRunning;
+            }
+        }
+    }
+
+    public bool IsModelThinking
+    {
+        get
+        {
+            lock (_sync)
+            {
+                return _modelThinking;
+            }
+        }
+    }
 
     public string Header =>
         $"EvoLoop Agent | profile: {Runtime.Profile} | mode: {Runtime.ModeLabel}";
@@ -165,6 +187,16 @@ internal sealed class TuiApp
         var message = TuiRuntimeEventFormatter.Format(evt);
         lock (_sync)
         {
+            _modelThinking = evt.Type switch
+            {
+                AgentRunEventType.ModelCallStarted => true,
+                AgentRunEventType.ModelCallCompleted => false,
+                AgentRunEventType.ToolExecutionStarted => false,
+                AgentRunEventType.ApprovalRequired => false,
+                AgentRunEventType.SessionCompleted => false,
+                AgentRunEventType.Error => false,
+                _ => _modelThinking
+            };
             _activity = message.Content;
             _messages.Add(message);
         }
@@ -341,6 +373,7 @@ internal sealed class TuiApp
             lock (_sync)
             {
                 _taskRunning = false;
+                _modelThinking = false;
                 _activity = "idle";
             }
 

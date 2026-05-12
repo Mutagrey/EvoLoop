@@ -49,6 +49,12 @@ public sealed class DefaultPolicyEngine : IPolicyEngine
             return new PolicyDecision(PolicyDecisionKind.Deny, "Target path is protected by workspace safety policy.");
         }
 
+        if (context.ApprovalMode == ApprovalPolicyMode.AutoEdit &&
+            IsDestructiveWorkspaceMutation(call.Name, metadata))
+        {
+            return new PolicyDecision(PolicyDecisionKind.RequireApproval, "AutoEdit mode requires approval for destructive workspace mutations.");
+        }
+
         if (metadata.Category == ToolCategory.Shell)
         {
             var command = ToolArgumentReader.GetString(call.Arguments, "command");
@@ -201,6 +207,18 @@ public sealed class DefaultPolicyEngine : IPolicyEngine
                command.Contains(">", StringComparison.Ordinal) ||
                command.Contains("$(", StringComparison.Ordinal) ||
                command.Contains("`", StringComparison.Ordinal);
+    }
+
+    private static bool IsDestructiveWorkspaceMutation(string toolName, ToolMetadata metadata)
+    {
+        if (!metadata.MutatesWorkspace)
+        {
+            return false;
+        }
+
+        return toolName.Equals("fs_delete", StringComparison.OrdinalIgnoreCase) ||
+               toolName.Equals("workspace_undo", StringComparison.OrdinalIgnoreCase) ||
+               (metadata.RiskLevel == ToolRiskLevel.Critical && metadata.Category != ToolCategory.Git);
     }
 
     private static HashSet<string> BuildAllowedNetworkHosts(AgentConfig config)

@@ -57,5 +57,5 @@ dotnet run --project src/Agent.Tui --
 
 ## Known Limitations
 
-- Approval requests use a basic blocking approve/reject dialog with path and diff/content previews for file writes and patches.
+- Approval requests use a basic blocking approve/reject dialog; default `AutoEdit` skips prompts for writes and patches but still prompts for destructive actions.
 - No review diff navigation, session list, or slash suggestion popup yet.

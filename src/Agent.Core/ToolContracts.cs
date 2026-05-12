@@ -75,7 +75,7 @@ public sealed record ToolContext(
             SessionId,
             ProfileName,
             AgentExecutionMode.Run,
-            ApprovalPolicyMode.WorkspaceWrite,
+            ApprovalPolicyMode.AutoEdit,
             Config,
             SearchService,
             Capabilities,

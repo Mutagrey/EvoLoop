@@ -88,7 +88,7 @@ public sealed record AgentRunRequest(
         string ProfileName,
         int? MaxSteps,
         IAgentRunObserver? Observer = null)
-        : this(Task, WorkspaceRoot, ProfileName, AgentExecutionMode.Run, ApprovalPolicyMode.WorkspaceWrite, MaxSteps, Observer)
+        : this(Task, WorkspaceRoot, ProfileName, AgentExecutionMode.Run, ApprovalPolicyMode.AutoEdit, MaxSteps, Observer)
     {
     }
 }

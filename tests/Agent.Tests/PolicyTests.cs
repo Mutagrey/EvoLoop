@@ -14,6 +14,8 @@ internal static class PolicyTests
         ("Policy denies destructive shell patterns", TestPolicyDeniesDestructiveShellPatterns),
         ("Policy reads nested shell command alias", TestPolicyReadsNestedShellCommandAlias),
         ("Policy requires approval for writes", TestPolicyRequiresApprovalForWrite),
+        ("Policy auto-edit allows write without approval", TestPolicyAutoEditAllowsWriteWithoutApproval),
+        ("Policy auto-edit requires approval for delete", TestPolicyAutoEditRequiresApprovalForDelete),
         ("Policy denies protected path mutation", TestPolicyDeniesProtectedPathMutation),
         ("Offline strict denies non-approved network shell", TestOfflineStrictDeniesNetworkShell),
         ("Offline strict allows approved gateway host with approval", TestOfflineStrictAllowsApprovedHostWithApproval),
@@ -166,15 +168,67 @@ static Task TestPolicyRequiresApprovalForWrite()
     using var doc = JsonDocument.Parse("{\"path\":\"file.txt\",\"content\":\"x\"}");
     var call = new ToolCall("fs_write", doc.RootElement.Clone(), "write");
     var context = new ToolContext(
-        WorkspaceRoot: "/tmp/workspace",
-        SessionId: "s1",
-        ProfileName: "reasoning",
-        Config: config,
-        SearchService: new NullSearchService(),
-        Capabilities: RuntimeCapabilities.Default);
+        "/tmp/workspace",
+        "s1",
+        "reasoning",
+        AgentExecutionMode.Run,
+        ApprovalPolicyMode.WorkspaceWrite,
+        config,
+        new NullSearchService(),
+        RuntimeCapabilities.Default,
+        NullPatchService.Instance,
+        NullEventLog.Instance);
 
     var decision = policy.Evaluate(call, context);
     Assert(decision.Kind == PolicyDecisionKind.RequireApproval, "Expected approval requirement for fs_write.");
+    return Task.CompletedTask;
+}
+
+static Task TestPolicyAutoEditAllowsWriteWithoutApproval()
+{
+    var config = new AgentConfig();
+    var policy = new DefaultPolicyEngine(config);
+
+    using var doc = JsonDocument.Parse("{\"path\":\"file.txt\",\"content\":\"x\"}");
+    var call = new ToolCall("fs_write", doc.RootElement.Clone(), "write");
+    var context = new ToolContext(
+        "/tmp/workspace",
+        "s1",
+        "reasoning",
+        AgentExecutionMode.Run,
+        ApprovalPolicyMode.AutoEdit,
+        config,
+        new NullSearchService(),
+        RuntimeCapabilities.Default,
+        NullPatchService.Instance,
+        NullEventLog.Instance);
+
+    var decision = policy.Evaluate(call, context);
+    Assert(decision.Kind == PolicyDecisionKind.Allow, "Expected AutoEdit to allow normal file writes.");
+    return Task.CompletedTask;
+}
+
+static Task TestPolicyAutoEditRequiresApprovalForDelete()
+{
+    var config = new AgentConfig();
+    var policy = new DefaultPolicyEngine(new ITool[] { new FsDeleteTool() }, config);
+
+    using var doc = JsonDocument.Parse("{\"path\":\"file.txt\"}");
+    var call = new ToolCall("fs_delete", doc.RootElement.Clone(), "delete");
+    var context = new ToolContext(
+        "/tmp/workspace",
+        "s1",
+        "reasoning",
+        AgentExecutionMode.Run,
+        ApprovalPolicyMode.AutoEdit,
+        config,
+        new NullSearchService(),
+        RuntimeCapabilities.Default,
+        NullPatchService.Instance,
+        NullEventLog.Instance);
+
+    var decision = policy.Evaluate(call, context);
+    Assert(decision.Kind == PolicyDecisionKind.RequireApproval, "Expected AutoEdit to require approval for delete.");
     return Task.CompletedTask;
 }
 

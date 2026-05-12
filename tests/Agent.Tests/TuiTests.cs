@@ -21,6 +21,7 @@ internal static class TuiTests
         ("TUI config open command uses attached opener", TestTuiConfigOpenCommandUsesAttachedOpener),
         ("TUI config reload updates runtime info", TestTuiConfigReloadUpdatesRuntimeInfo),
         ("TUI runtime observer records agent events", TestTuiRuntimeObserverRecordsEvents),
+        ("TUI app tracks model thinking state", TestTuiAppTracksModelThinkingState),
         ("TUI runtime formatter renders compact tool events", TestTuiRuntimeFormatterToolEvents),
         ("TUI runtime formatter renders approval and completion events", TestTuiRuntimeFormatterApprovalAndCompletionEvents),
         ("TUI approval service records default rejection", TestTuiApprovalServiceRecordsDefaultRejection),
@@ -91,7 +92,7 @@ static async Task TestTuiAppDispatchesPlainInputAsRun()
     Assert(runner.Calls.Count == 1, "Expected one runtime call.");
     Assert(runner.Calls[0].Task == "inspect project", "Expected task text to be passed through.");
     Assert(runner.Calls[0].ExecutionMode == AgentExecutionMode.Run, "Expected run mode.");
-    Assert(runner.Calls[0].ApprovalMode == ApprovalPolicyMode.WorkspaceWrite, "Expected configured default approval mode.");
+    Assert(runner.Calls[0].ApprovalMode == ApprovalPolicyMode.AutoEdit, "Expected configured default approval mode.");
 }
 
 static async Task TestTuiAppDispatchesPlanCommand()
@@ -204,6 +205,19 @@ static async Task TestTuiRuntimeObserverRecordsEvents()
     Assert(app.Messages.Last().Content.Contains("fs_read", StringComparison.Ordinal), "Expected runtime event to include tool name.");
 }
 
+static Task TestTuiAppTracksModelThinkingState()
+{
+    var app = CreateTestTuiApp();
+    app.RecordRuntimeEvent(new AgentRunEvent(AgentRunEventType.ModelCallStarted, "Calling model", 1));
+
+    Assert(app.IsModelThinking, "Expected model thinking state after model call starts.");
+
+    app.RecordRuntimeEvent(new AgentRunEvent(AgentRunEventType.ToolExecutionStarted, "Running tool fs_read", 1, "fs_read"));
+
+    Assert(!app.IsModelThinking, "Expected model thinking state to stop when tool execution starts.");
+    return Task.CompletedTask;
+}
+
 static Task TestTuiRuntimeFormatterToolEvents()
 {
     var running = TuiRuntimeEventFormatter.FormatText(new AgentRunEvent(
@@ -218,8 +232,40 @@ static Task TestTuiRuntimeFormatterToolEvents()
         "read src/Agent.Tui/TuiApp.cs",
         2,
         "fs_read",
-        new Dictionary<string, string> { [ToolActivityMetadata.SuccessKey] = "true" }));
-    Assert(completed == "#2 ok: fs_read - read src/Agent.Tui/TuiApp.cs", "Expected compact tool completion line.");
+        new Dictionary<string, string>
+        {
+            [ToolActivityMetadata.SuccessKey] = "true",
+            [ToolActivityMetadata.KindKey] = "read",
+            [ToolActivityMetadata.PathKey] = "src/Agent.Tui/TuiApp.cs",
+            [ToolActivityMetadata.SummaryKey] = "Read src/Agent.Tui/TuiApp.cs"
+        }));
+    Assert(completed == "#2 read: src/Agent.Tui/TuiApp.cs (fs_read)", "Expected structured read completion line.");
+
+    var search = TuiRuntimeEventFormatter.FormatText(new AgentRunEvent(
+        AgentRunEventType.ToolExecutionCompleted,
+        "Searched \"approval\"",
+        3,
+        "search_lexical",
+        new Dictionary<string, string>
+        {
+            [ToolActivityMetadata.SuccessKey] = "true",
+            [ToolActivityMetadata.KindKey] = "search",
+            [ToolActivityMetadata.QueryKey] = "approval",
+            [ToolActivityMetadata.SummaryKey] = "Searched \"approval\""
+        }));
+    Assert(search == "#3 search: \"approval\" (search_lexical)", "Expected structured search completion line.");
+
+    var failed = TuiRuntimeEventFormatter.FormatText(new AgentRunEvent(
+        AgentRunEventType.ToolExecutionCompleted,
+        "File not found",
+        4,
+        "fs_read",
+        new Dictionary<string, string>
+        {
+            [ToolActivityMetadata.SuccessKey] = "false",
+            [ToolActivityMetadata.SummaryKey] = "fs_read failed: File not found"
+        }));
+    Assert(failed == "#4 failed: fs_read - fs_read failed: File not found", "Expected failed completion line.");
     return Task.CompletedTask;
 }
 
@@ -321,8 +367,11 @@ static Task TestTuiTranscriptRenderer()
         TuiMessage.System("runtime event")
     }, 60);
 
-    Assert(rendered.Contains("[user] hello", StringComparison.Ordinal), "Expected user role prefix.");
-    Assert(rendered.Contains("[system] runtime event", StringComparison.Ordinal), "Expected system role prefix.");
+    Assert(rendered.Contains("user", StringComparison.Ordinal), "Expected user role label.");
+    Assert(rendered.Contains("  hello", StringComparison.Ordinal), "Expected user message content.");
+    Assert(rendered.Contains("system", StringComparison.Ordinal), "Expected system role label.");
+    Assert(rendered.Contains("  runtime event", StringComparison.Ordinal), "Expected system message content.");
+    Assert(rendered.Contains(':', StringComparison.Ordinal), "Expected timestamp in transcript.");
     return Task.CompletedTask;
 }
 
@@ -427,7 +476,7 @@ static TuiApp CreateTestTuiApp()
             "reasoning",
             "local-only degraded",
             "model unavailable",
-            ApprovalPolicyMode.WorkspaceWrite,
+            ApprovalPolicyMode.AutoEdit,
             TuiTheme.DefaultName,
             false,
             true,

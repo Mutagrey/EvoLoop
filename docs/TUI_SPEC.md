@@ -23,6 +23,9 @@ Implemented:
 - basic Terminal.Gui approve/reject dialog for runtime approval requests
 - structured approval previews for file write and patch requests
 - compact runtime event formatting for model, tool, approval, memory, and session status lines
+- structured tool activity rendering for read, edit, search, command, explore, and failed tool completions
+- grouped transcript rendering with timestamps and role-specific colors
+- status-bar thinking/working spinner while a task is active
 
 Normal text runs through the shared agent runtime in `run` mode. `/plan <task>` runs in read-only plan mode. `/review [focus]` runs review mode and can use the local degraded review fallback when model execution is unavailable.
 
@@ -56,9 +59,9 @@ Packaged Windows wrappers should map `agent.cmd` to `Agent.Tui.exe` and `agent-c
 The minimal shell supports:
 
 - app start and shutdown
-- chat transcript
+- grouped chat transcript with timestamps
 - input box
-- status bar
+- status bar with active task spinner
 - `/help`
 - `/status`
 - `/plan <task>`
@@ -73,4 +76,4 @@ Default styling is a dark terminal palette: black background, gray text, muted c
 
 ## Next Implementation Phase
 
-Add richer tool activity rendering without changing Core, Tools, Providers, or Storage ownership.
+Add review-specific diff navigation without changing Core, Tools, Providers, or Storage ownership.

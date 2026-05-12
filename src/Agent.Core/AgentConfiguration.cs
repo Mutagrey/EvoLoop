@@ -52,7 +52,7 @@ public sealed class SafetyConfig
     public bool RequireApprovalForRiskyShell { get; init; } = true;
     public bool DenyOutsideWorkspace { get; init; } = true;
     public bool OfflineStrictMode { get; init; } = false;
-    public ApprovalPolicyMode DefaultApprovalMode { get; init; } = ApprovalPolicyMode.WorkspaceWrite;
+    public ApprovalPolicyMode DefaultApprovalMode { get; init; } = ApprovalPolicyMode.AutoEdit;
     public List<string> AllowedNetworkHosts { get; init; } = new();
     public List<string> DeniedShellPatterns { get; init; } = new()
     {

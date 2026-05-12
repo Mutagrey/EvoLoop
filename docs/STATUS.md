@@ -78,10 +78,13 @@ Ordered refactor work follows `docs/architecture/refactor-plan.md`; this file re
 - Replaced hidden model-profile switch ordering with explicit `runtime.profileFallbackOrder`.
 - Added Pi-inspired prompt files: global/workspace `SYSTEM.md`, `APPEND_SYSTEM.md`, and indexed workspace prompt templates under `.evoloop/prompts/*.md`.
 - Added TUI `/config`, `/config path`, `/config open`, and `/config reload` commands with grouped settings and runtime reload wiring.
+- Added structured TUI tool activity rendering for read, edit, search, command, explore, and failed tool completions.
+- Improved TUI transcript readability with grouped timestamped messages, role-specific colors, and a thinking/working spinner.
 - Added an `ollama` model provider for local `/api/chat` with `think=false`, and verified `qwen3.5:9b` through a read-only `fs_read` agent flow.
 - Raised the default ReAct step budget to 120 because JSON-ReAct fallback normally executes one tool per model turn.
 - Stopped run scripts from overriding `HOME` so user-level config such as `~/.evoloop-agent/config.json` is visible when launching `agent`.
 - Removed `win-arm64` packaging support; Windows distribution is `win-x64` only.
+- Switched the default approval mode to `AutoEdit`, allowing normal workspace writes/patches without repeated prompts while keeping destructive actions approval-gated.
 
 ## Current Problems
 

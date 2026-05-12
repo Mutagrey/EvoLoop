@@ -65,7 +65,7 @@ Behavior:
 
 - `ReadOnly`: read/search/review only
 - `WorkspaceWrite`: file mutation allowed with approval; shell requires approval
-- `AutoEdit`: file mutation allowed inside workspace; risky shell and commits still require approval
+- `AutoEdit`: default mode; file writes and patches allowed inside workspace; deletes, undo, shell, and git staging/commits still require approval
 - `DangerFullAccess`: least restrictive mode, still bounded by workspace/path policy unless explicitly changed in code
 
 ## Tool Fallbacks

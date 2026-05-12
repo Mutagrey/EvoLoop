@@ -6,17 +6,49 @@ internal static class TranscriptRenderer
 {
     public static string Render(IEnumerable<TuiMessage> messages, int maxWidth = 100)
     {
-        var width = Math.Clamp(maxWidth, 40, 240);
         var sb = new StringBuilder();
 
-        foreach (var message in messages)
+        foreach (var line in RenderLines(messages, maxWidth))
         {
-            var prefix = $"[{GetLabel(message.Role)}] ";
-            AppendWrapped(sb, prefix, message.Content, width);
+            sb.Append(line.Text);
             sb.AppendLine();
         }
 
         return sb.ToString().TrimEnd();
+    }
+
+    public static IReadOnlyList<TranscriptRenderLine> RenderLines(IEnumerable<TuiMessage> messages, int maxWidth = 100)
+    {
+        var width = Math.Clamp(maxWidth, 40, 240);
+        var lines = new List<TranscriptRenderLine>();
+        var previousRole = (TuiMessageRole?)null;
+
+        foreach (var message in messages)
+        {
+            var major = message.Role is not TuiMessageRole.Status;
+            if (lines.Count > 0 && major && previousRole != message.Role)
+            {
+                lines.Add(TranscriptRenderLine.Spacer);
+            }
+
+            var time = message.CreatedAtUtc.ToLocalTime().ToString("HH:mm");
+            var important = IsImportant(message);
+            var label = GetLabel(message.Role);
+
+            if (message.Role == TuiMessageRole.Status)
+            {
+                AppendWrapped(lines, message.Role, $"[{time}] {label}  ", message.Content, width, important);
+            }
+            else
+            {
+                lines.Add(new TranscriptRenderLine(message.Role, $"[{time}] {label}", true, important));
+                AppendWrapped(lines, message.Role, "  ", message.Content, width, important);
+            }
+
+            previousRole = message.Role;
+        }
+
+        return lines;
     }
 
     private static string GetLabel(TuiMessageRole role)
@@ -31,7 +63,32 @@ internal static class TranscriptRenderer
         };
     }
 
-    private static void AppendWrapped(StringBuilder sb, string prefix, string content, int maxWidth)
+    private static bool IsImportant(TuiMessage message)
+    {
+        if (message.Role == TuiMessageRole.Error)
+        {
+            return true;
+        }
+
+        if (message.Role != TuiMessageRole.Status)
+        {
+            return false;
+        }
+
+        return message.Content.StartsWith("approval required", StringComparison.OrdinalIgnoreCase) ||
+               message.Content.Contains("denied", StringComparison.OrdinalIgnoreCase) ||
+               message.Content.Contains("failed", StringComparison.OrdinalIgnoreCase) ||
+               message.Content.Contains("rejected", StringComparison.OrdinalIgnoreCase) ||
+               message.Content.Contains("unavailable", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static void AppendWrapped(
+        List<TranscriptRenderLine> lines,
+        TuiMessageRole role,
+        string prefix,
+        string content,
+        int maxWidth,
+        bool important)
     {
         var lineWidth = Math.Max(16, maxWidth - prefix.Length);
         var continuation = new string(' ', prefix.Length);
@@ -41,28 +98,26 @@ internal static class TranscriptRenderer
         {
             if (p > 0)
             {
-                sb.AppendLine();
+                lines.Add(TranscriptRenderLine.Spacer);
             }
 
             var currentPrefix = p == 0 ? prefix : continuation;
             var remaining = paragraphs[p];
             if (remaining.Length == 0)
             {
-                sb.Append(currentPrefix);
+                lines.Add(new TranscriptRenderLine(role, currentPrefix.TrimEnd(), false, important));
                 continue;
             }
 
             while (remaining.Length > lineWidth)
             {
                 var split = FindSplit(remaining, lineWidth);
-                sb.Append(currentPrefix);
-                sb.AppendLine(remaining[..split].TrimEnd());
+                lines.Add(new TranscriptRenderLine(role, currentPrefix + remaining[..split].TrimEnd(), false, important));
                 remaining = remaining[split..].TrimStart();
                 currentPrefix = continuation;
             }
 
-            sb.Append(currentPrefix);
-            sb.Append(remaining);
+            lines.Add(new TranscriptRenderLine(role, currentPrefix + remaining, false, important));
         }
     }
 
@@ -78,4 +133,13 @@ internal static class TranscriptRenderer
 
         return max;
     }
+}
+
+internal sealed record TranscriptRenderLine(
+    TuiMessageRole Role,
+    string Text,
+    bool IsHeader,
+    bool IsImportant)
+{
+    public static TranscriptRenderLine Spacer { get; } = new(TuiMessageRole.Status, string.Empty, false, false);
 }

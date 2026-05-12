@@ -18,6 +18,10 @@ internal sealed class TuiTheme
         SchemeColors input,
         SchemeColors prompt,
         SchemeColors status,
+        SchemeColors user,
+        SchemeColors assistant,
+        SchemeColors important,
+        SchemeColors thinking,
         SchemeColors error)
     {
         Name = name;
@@ -30,6 +34,10 @@ internal sealed class TuiTheme
         InputColors = input;
         PromptColors = prompt;
         StatusColors = status;
+        UserColors = user;
+        AssistantColors = assistant;
+        ImportantColors = important;
+        ThinkingColors = thinking;
         ErrorColors = error;
     }
 
@@ -43,6 +51,10 @@ internal sealed class TuiTheme
     private SchemeColors InputColors { get; }
     private SchemeColors PromptColors { get; }
     private SchemeColors StatusColors { get; }
+    private SchemeColors UserColors { get; }
+    private SchemeColors AssistantColors { get; }
+    private SchemeColors ImportantColors { get; }
+    private SchemeColors ThinkingColors { get; }
     private SchemeColors ErrorColors { get; }
 
     public ColorScheme TopLevel => Scheme(TopLevelColors);
@@ -54,6 +66,10 @@ internal sealed class TuiTheme
     public ColorScheme Input => Scheme(InputColors);
     public ColorScheme Prompt => Scheme(PromptColors);
     public ColorScheme Status => Scheme(StatusColors);
+    public ColorScheme User => Scheme(UserColors);
+    public ColorScheme Assistant => Scheme(AssistantColors);
+    public ColorScheme Important => Scheme(ImportantColors);
+    public ColorScheme Thinking => Scheme(ThinkingColors);
     public ColorScheme Error => Scheme(ErrorColors);
 
     public static TuiTheme Resolve(string? name, bool noColor)
@@ -85,6 +101,8 @@ internal sealed class TuiTheme
         const Color bright = Color.White;
         const Color amber = Color.BrightYellow;
         const Color amberDim = Color.Brown;
+        const Color cyan = Color.BrightCyan;
+        const Color green = Color.BrightGreen;
 
         return new TuiTheme(
             DefaultName,
@@ -97,6 +115,10 @@ internal sealed class TuiTheme
             new SchemeColors(fg, bg, bright, bg, amber, bg),
             new SchemeColors(amber, bg, bright, bg, amber, bg),
             new SchemeColors(muted, bg, fg, bg, amberDim, bg),
+            new SchemeColors(amber, bg, bright, bg, amber, bg),
+            new SchemeColors(cyan, bg, bright, bg, cyan, bg),
+            new SchemeColors(amber, bg, bright, bg, amber, bg),
+            new SchemeColors(green, bg, bright, bg, green, bg),
             new SchemeColors(Color.BrightRed, bg, bright, bg, Color.BrightRed, bg));
     }
 
@@ -118,6 +140,10 @@ internal sealed class TuiTheme
             new SchemeColors(fg, bg, bright, bg, fg, bg),
             new SchemeColors(bright, bg, bright, bg, bright, bg),
             new SchemeColors(muted, bg, fg, bg, muted, bg),
+            new SchemeColors(bright, bg, bright, bg, bright, bg),
+            new SchemeColors(fg, bg, bright, bg, fg, bg),
+            new SchemeColors(bright, bg, bright, bg, bright, bg),
+            new SchemeColors(fg, bg, bright, bg, fg, bg),
             new SchemeColors(bright, bg, bright, bg, bright, bg));
     }
 

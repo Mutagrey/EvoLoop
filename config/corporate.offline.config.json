@@ -17,7 +17,7 @@
   },
   "safety": {
     "offlineStrictMode": true,
-    "defaultApprovalMode": "WorkspaceWrite",
+    "defaultApprovalMode": "AutoEdit",
     "allowedNetworkHosts": [
       "YOUR-GATEWAY-HOST"
     ]
