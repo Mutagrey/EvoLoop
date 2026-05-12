@@ -16,27 +16,8 @@ export NUGET_PACKAGES="$repo_root/.tooling/nuget"
 
 "$repo_root/scripts/build-agent.sh" >/dev/null
 
-target_project="$repo_root/src/Agent.Tui"
-for ((i = 1; i <= $#; i++)); do
-  arg="${!i}"
-  case "$arg" in
-    --workspace|--config|--profile|--model)
-      ((i++))
-      ;;
-    --no-color|--offline-strict)
-      ;;
-    doctor|run|plan|review|repl|interactive)
-      target_project="$repo_root/src/Agent.Cli"
-      break
-      ;;
-    *)
-      break
-      ;;
-  esac
-done
-
 if [[ -x "$local_dotnet" ]]; then
-  "$local_dotnet" run --project "$target_project" --no-build -- "$@"
+  "$local_dotnet" run --project "$repo_root/src/Agent.Cli" --no-build -- "$@"
 else
-  dotnet run --project "$target_project" -- "$@"
+  dotnet run --project "$repo_root/src/Agent.Cli" -- "$@"
 fi

@@ -63,6 +63,7 @@ Smoke test on target machine:
 - failed tools -> next turn receives a structured `ToolResultMessage` with `IsError=true`
 - skills index -> `.evoloop/skills/*/SKILL.md` contributes only name/description/path until a tool reads the full file
 - `Agent.Tui` -> starts the minimal Terminal.Gui shell; `/help`, `/exit`, `Ctrl+C`, and empty-input `Ctrl+D` close or respond as expected
+- `Agent.Tui --theme claude-dark` -> uses the default dark theme with amber/yellow workspace path; `--no-color` forces mono styling
 - `Agent.Cli repl` -> enters the legacy line-based REPL
 - vendored TUI packages -> package files exist under `vendor/nuget`; `Agent.Tui` restores `Terminal.Gui` from the local feed
 

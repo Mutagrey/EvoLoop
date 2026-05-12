@@ -14,6 +14,8 @@ var tests = new List<(string Name, Func<Task> Run)>
 {
     ("CLI parser defaults to REPL and preserves explicit modes", TestCliParserModes),
     ("TUI slash commands filter and render help", TestTuiSlashCommands),
+    ("TUI parser accepts theme options", TestTuiParserThemeOptions),
+    ("TUI theme resolves default and no-color variants", TestTuiThemeResolution),
     ("TUI app records pending-agent message", TestTuiAppRecordsPendingAgentMessage),
     ("TUI app reports unknown slash command", TestTuiUnknownSlashCommand),
     ("TUI transcript renderer formats roles", TestTuiTranscriptRenderer),
@@ -114,6 +116,10 @@ static Task TestCliParserModes()
     Assert(run.Task == "inspect", "Expected run task to be parsed.");
     Assert(run.OfflineStrict, "Expected offline strict flag.");
 
+    var leadingOptions = CliArguments.Parse(new[] { "--workspace", "/tmp/project", "doctor" });
+    Assert(leadingOptions.Mode == CliMode.Doctor, "Expected mode after leading global options.");
+    Assert(leadingOptions.Workspace == "/tmp/project", "Expected leading workspace option.");
+
     return Task.CompletedTask;
 }
 
@@ -129,6 +135,27 @@ static Task TestTuiSlashCommands()
     Assert(!help.ExitRequested, "Expected /help to keep the TUI open.");
     Assert(help.Message.Contains("/exit", StringComparison.Ordinal), "Expected help to list /exit.");
     Assert(help.Message.Contains("agent integration pending", StringComparison.OrdinalIgnoreCase), "Expected help to state current limitation.");
+    return Task.CompletedTask;
+}
+
+static Task TestTuiParserThemeOptions()
+{
+    var themed = TuiArguments.Parse(new[] { "--theme", "mono" });
+    Assert(themed.Theme == "mono", "Expected --theme to be parsed.");
+
+    var noColor = TuiArguments.Parse(new[] { "--no-color", "--theme", "claude-dark" });
+    Assert(noColor.NoColor, "Expected --no-color to be parsed.");
+    Assert(noColor.Theme == "claude-dark", "Expected explicit theme to remain visible even when no-color is set.");
+    return Task.CompletedTask;
+}
+
+static Task TestTuiThemeResolution()
+{
+    var dark = TuiTheme.Resolve(null, false);
+    Assert(dark.Name == TuiTheme.DefaultName, "Expected default theme to resolve to claude-dark.");
+
+    var mono = TuiTheme.Resolve("claude-dark", true);
+    Assert(mono.Name == TuiTheme.NoColorName, "Expected no-color to force mono theme.");
     return Task.CompletedTask;
 }
 
@@ -179,6 +206,7 @@ static TuiApp CreateTestTuiApp()
             "local-only degraded",
             "model unavailable",
             ApprovalPolicyMode.WorkspaceWrite.ToString(),
+            TuiTheme.DefaultName,
             false,
             true,
             false),

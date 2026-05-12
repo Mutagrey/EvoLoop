@@ -4,11 +4,19 @@ namespace Agent.Tui;
 
 internal sealed class TerminalGuiTuiHost
 {
+    private readonly TuiTheme _theme;
+
+    public TerminalGuiTuiHost(TuiTheme theme)
+    {
+        _theme = theme;
+    }
+
     public void Run(TuiApp app)
     {
         Application.Init();
         try
         {
+            _theme.ApplyGlobals();
             BuildMainWindow(app);
             Application.Run();
         }
@@ -18,34 +26,84 @@ internal sealed class TerminalGuiTuiHost
         }
     }
 
-    private static void BuildMainWindow(TuiApp app)
+    private void BuildMainWindow(TuiApp app)
     {
         var top = Application.Top;
-        var window = new Window("EvoLoop Agent")
+        top.ColorScheme = _theme.TopLevel;
+
+        var root = new View
         {
             X = 0,
             Y = 0,
             Width = Dim.Fill(),
-            Height = Dim.Fill()
+            Height = Dim.Fill(),
+            ColorScheme = _theme.TopLevel
         };
 
-        var header = new Label(app.Header)
+        var title = new Label("EvoLoop")
         {
             X = 0,
             Y = 0,
+            Width = 8,
+            Height = 1,
+            ColorScheme = _theme.Title
+        };
+
+        var profile = new Label($"profile {app.Runtime.Profile}")
+        {
+            X = Pos.Right(title) + 2,
+            Y = 0,
+            Width = 22,
+            Height = 1,
+            ColorScheme = _theme.Muted
+        };
+
+        var mode = new Label($"mode {app.Runtime.ModeLabel}")
+        {
+            X = Pos.Right(profile) + 2,
+            Y = 0,
             Width = Dim.Fill(),
-            Height = 1
+            Height = 1,
+            ColorScheme = _theme.Muted
+        };
+
+        var cwdLabel = new Label("cwd")
+        {
+            X = 0,
+            Y = 1,
+            Width = 3,
+            Height = 1,
+            ColorScheme = _theme.Muted
+        };
+
+        var cwd = new Label(app.Runtime.Workspace)
+        {
+            X = 5,
+            Y = 1,
+            Width = Dim.Fill(),
+            Height = 1,
+            ColorScheme = _theme.Path
+        };
+
+        var separator = new Label(new string('-', 120))
+        {
+            X = 0,
+            Y = 2,
+            Width = Dim.Fill(),
+            Height = 1,
+            ColorScheme = _theme.Muted
         };
 
         var transcript = new TextView
         {
             X = 0,
-            Y = 2,
+            Y = 3,
             Width = Dim.Fill(),
             Height = Dim.Fill(4),
             ReadOnly = true,
             WordWrap = true,
-            Text = app.Transcript(SafeConsoleWidth())
+            Text = app.Transcript(SafeConsoleWidth()),
+            ColorScheme = _theme.Transcript
         };
 
         var prompt = new Label(">")
@@ -53,7 +111,8 @@ internal sealed class TerminalGuiTuiHost
             X = 0,
             Y = Pos.Bottom(transcript) + 1,
             Width = 1,
-            Height = 1
+            Height = 1,
+            ColorScheme = _theme.Prompt
         };
 
         var input = new TextField(string.Empty)
@@ -61,7 +120,8 @@ internal sealed class TerminalGuiTuiHost
             X = 2,
             Y = Pos.Bottom(transcript) + 1,
             Width = Dim.Fill(),
-            Height = 1
+            Height = 1,
+            ColorScheme = _theme.Input
         };
 
         var status = new Label(app.StatusLine)
@@ -69,7 +129,8 @@ internal sealed class TerminalGuiTuiHost
             X = 0,
             Y = Pos.AnchorEnd(1),
             Width = Dim.Fill(),
-            Height = 1
+            Height = 1,
+            ColorScheme = _theme.Status
         };
 
         void RefreshTranscript()
@@ -144,8 +205,8 @@ internal sealed class TerminalGuiTuiHost
             }
         };
 
-        window.Add(header, transcript, prompt, input, status);
-        top.Add(window);
+        root.Add(title, profile, mode, cwdLabel, cwd, separator, transcript, prompt, input, status);
+        top.Add(root);
         input.SetFocus();
     }
 

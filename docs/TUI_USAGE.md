@@ -12,7 +12,24 @@ Packaged Windows usage:
 agent.cmd
 ```
 
+Compatibility commands such as `agent.cmd doctor`, `agent.cmd run`, `agent.cmd plan`, `agent.cmd review`, and `agent.cmd repl` route to the CLI target. Use `agent-cli.cmd` when you want the CLI explicitly.
+
 The shell shows workspace, profile, runtime mode, a readonly transcript, an input line, and a status bar.
+
+## Theme
+
+Default theme:
+
+```bash
+dotnet run --project src/Agent.Tui -- --theme claude-dark
+```
+
+Available themes:
+
+- `claude-dark`: dark terminal palette with gray text and amber/yellow workspace path.
+- `mono`: conservative no-color style for limited terminals.
+
+`--no-color` forces `mono`.
 
 ## Commands
 

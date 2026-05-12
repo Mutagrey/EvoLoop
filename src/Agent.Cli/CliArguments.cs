@@ -22,6 +22,7 @@ internal sealed class CliArguments
     public static CliArguments Parse(string[] args)
     {
         var mode = CliMode.Repl;
+        var modeSet = false;
         string? task = null;
         var profile = "reasoning";
         string? workspace = null;
@@ -29,51 +30,7 @@ internal sealed class CliArguments
         var noColor = false;
         var offlineStrict = false;
 
-        var i = 0;
-        if (args.Length > 0 && args[0].Equals("run", StringComparison.OrdinalIgnoreCase))
-        {
-            mode = CliMode.Run;
-            i = 1;
-            if (i < args.Length && !args[i].StartsWith("--", StringComparison.Ordinal))
-            {
-                task = args[i];
-                i++;
-            }
-        }
-        else if (args.Length > 0 && args[0].Equals("plan", StringComparison.OrdinalIgnoreCase))
-        {
-            mode = CliMode.Plan;
-            i = 1;
-            if (i < args.Length && !args[i].StartsWith("--", StringComparison.Ordinal))
-            {
-                task = args[i];
-                i++;
-            }
-        }
-        else if (args.Length > 0 && args[0].Equals("review", StringComparison.OrdinalIgnoreCase))
-        {
-            mode = CliMode.Review;
-            i = 1;
-            if (i < args.Length && !args[i].StartsWith("--", StringComparison.Ordinal))
-            {
-                task = args[i];
-                i++;
-            }
-        }
-        else if (args.Length > 0 && args[0].Equals("doctor", StringComparison.OrdinalIgnoreCase))
-        {
-            mode = CliMode.Doctor;
-            i = 1;
-        }
-        else if (args.Length > 0 &&
-                 (args[0].Equals("repl", StringComparison.OrdinalIgnoreCase) ||
-                  args[0].Equals("interactive", StringComparison.OrdinalIgnoreCase)))
-        {
-            mode = CliMode.Repl;
-            i = 1;
-        }
-
-        for (; i < args.Length; i++)
+        for (var i = 0; i < args.Length; i++)
         {
             var arg = args[i];
             switch (arg)
@@ -97,9 +54,14 @@ internal sealed class CliArguments
                     offlineStrict = true;
                     break;
                 default:
-                    if ((mode == CliMode.Run || mode == CliMode.Plan || mode == CliMode.Review) &&
-                        task is null &&
-                        !arg.StartsWith("--", StringComparison.Ordinal))
+                    if (!modeSet && TryParseMode(arg, out var parsedMode))
+                    {
+                        mode = parsedMode;
+                        modeSet = true;
+                    }
+                    else if ((mode == CliMode.Run || mode == CliMode.Plan || mode == CliMode.Review) &&
+                             task is null &&
+                             !arg.StartsWith("--", StringComparison.Ordinal))
                     {
                         task = arg;
                     }
@@ -117,5 +79,42 @@ internal sealed class CliArguments
             NoColor = noColor,
             OfflineStrict = offlineStrict
         };
+    }
+
+    private static bool TryParseMode(string value, out CliMode mode)
+    {
+        if (value.Equals("run", StringComparison.OrdinalIgnoreCase))
+        {
+            mode = CliMode.Run;
+            return true;
+        }
+
+        if (value.Equals("plan", StringComparison.OrdinalIgnoreCase))
+        {
+            mode = CliMode.Plan;
+            return true;
+        }
+
+        if (value.Equals("review", StringComparison.OrdinalIgnoreCase))
+        {
+            mode = CliMode.Review;
+            return true;
+        }
+
+        if (value.Equals("doctor", StringComparison.OrdinalIgnoreCase))
+        {
+            mode = CliMode.Doctor;
+            return true;
+        }
+
+        if (value.Equals("repl", StringComparison.OrdinalIgnoreCase) ||
+            value.Equals("interactive", StringComparison.OrdinalIgnoreCase))
+        {
+            mode = CliMode.Repl;
+            return true;
+        }
+
+        mode = CliMode.Repl;
+        return false;
     }
 }

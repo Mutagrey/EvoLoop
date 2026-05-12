@@ -27,6 +27,7 @@ Model tool calling:
 
 Terminal behavior:
 - packaged `agent.cmd` starts the TUI target
+- `agent.cmd doctor/run/plan/review/repl` delegates to the CLI target for compatibility
 - packaged `agent-cli.cmd` starts the pure CLI target
 - ANSI-capable terminals use colored status output and live step spinner
 - plain Windows `cmd` falls back to plain ASCII output without ANSI escape noise

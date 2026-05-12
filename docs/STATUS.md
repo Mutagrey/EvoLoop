@@ -44,6 +44,8 @@
 - Added TUI audit docs, vendored `Terminal.Gui 1.19.0` package files, and generated current project lock files for offline restore.
 - Implemented the minimal `Agent.Tui` Terminal.Gui shell with static transcript, input line, status bar, `/help`, `/exit`, and shutdown shortcuts.
 - Added testable TUI command and transcript rendering helpers covered by the lightweight test harness.
+- Added a TUI theme layer with `claude-dark` and `mono`; the default dark theme uses gray terminal colors with an amber/yellow workspace path.
+- Made user command installers repair existing EvoLoop profile blocks, add `agent-cli`, and keep `agent doctor/run/plan/review/repl` compatible with the CLI target.
 
 ## Current Problems
 

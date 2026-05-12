@@ -16,6 +16,7 @@ Implemented:
 - keep the old line REPL in `Agent.Cli`
 - vendor the TUI dependency packages for offline restore
 - minimal Terminal.Gui shell with static chat transcript, input line, status bar, `/help`, and `/exit`
+- theme layer with `claude-dark` and `mono`
 
 The current TUI shell does not run agent tasks yet. Normal input is recorded in the transcript and returns an explicit "agent integration pending" status message.
 
@@ -56,6 +57,10 @@ The minimal shell supports:
 - `/exit`
 - `Ctrl+C` shutdown
 - `Ctrl+D` shutdown when input is empty
+- `--theme claude-dark|mono`
+- `--no-color` to force mono styling
+
+Default styling is a dark terminal palette: black background, gray text, muted chrome, and amber/yellow workspace path. Theme definitions live in the TUI layer so future palettes can be added without changing Core, Tools, Providers, or Storage.
 
 ## Next Implementation Phase
 

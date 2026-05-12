@@ -20,7 +20,7 @@ internal sealed class TuiApp
         $"EvoLoop Agent | profile: {Runtime.Profile} | mode: {Runtime.ModeLabel}";
 
     public string StatusLine =>
-        $"idle | approval: {Runtime.ApprovalMode} | cwd: {Runtime.Workspace}";
+        $"idle | approval: {Runtime.ApprovalMode} | theme: {Runtime.ThemeName}";
 
     public string Transcript(int maxWidth = 100) => TranscriptRenderer.Render(_messages, maxWidth);
 

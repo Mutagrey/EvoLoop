@@ -9,11 +9,12 @@ internal sealed record TuiRuntimeInfo(
     string ModeLabel,
     string ModelStatus,
     string ApprovalMode,
+    string ThemeName,
     bool OfflineStrict,
     bool ApiAuthConfigured,
     bool CanRunAgentTasks)
 {
-    public static TuiRuntimeInfo From(AgentRuntimeContext context, TuiArguments arguments)
+    public static TuiRuntimeInfo From(AgentRuntimeContext context, TuiArguments arguments, string themeName)
     {
         return new TuiRuntimeInfo(
             context.Workspace,
@@ -22,6 +23,7 @@ internal sealed record TuiRuntimeInfo(
             context.Capabilities.ModeLabel,
             context.Capabilities.ModelStatus,
             context.Config.Safety.DefaultApprovalMode.ToString(),
+            themeName,
             context.Config.Safety.OfflineStrictMode,
             AgentStartup.HasApiAuthConfigured(context.Config),
             context.Capabilities.CanRunAgentTasks);

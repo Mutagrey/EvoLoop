@@ -15,10 +15,11 @@ public static class Program
                 new AgentRuntimeOptions(command.Workspace, command.ConfigPath, command.OfflineStrict),
                 CancellationToken.None);
 
+            var theme = TuiTheme.Resolve(command.Theme, command.NoColor);
             var app = new TuiApp(
-                TuiRuntimeInfo.From(context, command),
+                TuiRuntimeInfo.From(context, command, theme.Name),
                 SlashCommandRegistry.CreateDefault());
-            new TerminalGuiTuiHost().Run(app);
+            new TerminalGuiTuiHost(theme).Run(app);
             return 0;
         }
         catch (Exception ex)

@@ -47,4 +47,70 @@ if exist "%REPO_ROOT%\.tooling\dotnet8\dotnet.exe" (
     -o "%OUTPUT_DIR%"
 )
 
+call :writeWrappers "%OUTPUT_DIR%"
+if errorlevel 1 exit /b 1
+
 endlocal
+
+exit /b 0
+
+:writeWrappers
+(
+  echo @echo off
+  echo setlocal
+  echo set ROUTE=tui
+  echo call :selectRoute %%*
+  echo if /I "%%ROUTE%%"=="cli" ^(
+  echo   "%%~dp0Agent.Cli.exe" --workspace "%%cd%%" %%*
+  echo ^) else ^(
+  echo   "%%~dp0Agent.Tui.exe" --workspace "%%cd%%" %%*
+  echo ^)
+  echo exit /b %%errorlevel%%
+  echo.
+  echo :selectRoute
+  echo if "%%~1"=="" exit /b 0
+  echo if /I "%%~1"=="--workspace" ^(
+  echo   shift
+  echo   shift
+  echo   goto selectRoute
+  echo ^)
+  echo if /I "%%~1"=="--config" ^(
+  echo   shift
+  echo   shift
+  echo   goto selectRoute
+  echo ^)
+  echo if /I "%%~1"=="--profile" ^(
+  echo   shift
+  echo   shift
+  echo   goto selectRoute
+  echo ^)
+  echo if /I "%%~1"=="--model" ^(
+  echo   shift
+  echo   shift
+  echo   goto selectRoute
+  echo ^)
+  echo if /I "%%~1"=="--no-color" ^(
+  echo   shift
+  echo   goto selectRoute
+  echo ^)
+  echo if /I "%%~1"=="--offline-strict" ^(
+  echo   shift
+  echo   goto selectRoute
+  echo ^)
+  echo if /I "%%~1"=="doctor" set ROUTE=cli
+  echo if /I "%%~1"=="run" set ROUTE=cli
+  echo if /I "%%~1"=="plan" set ROUTE=cli
+  echo if /I "%%~1"=="review" set ROUTE=cli
+  echo if /I "%%~1"=="repl" set ROUTE=cli
+  echo if /I "%%~1"=="interactive" set ROUTE=cli
+  echo exit /b 0
+) > "%~1\agent.cmd"
+
+(
+  echo @echo off
+  echo setlocal
+  echo "%%~dp0Agent.Cli.exe" --workspace "%%cd%%" %%*
+  echo endlocal
+) > "%~1\agent-cli.cmd"
+
+exit /b 0

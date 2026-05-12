@@ -7,6 +7,7 @@ internal sealed class TuiArguments
     public string? ConfigPath { get; init; }
     public bool NoColor { get; init; }
     public bool OfflineStrict { get; init; }
+    public string Theme { get; init; } = TuiTheme.DefaultName;
 
     public static TuiArguments Parse(string[] args)
     {
@@ -15,6 +16,7 @@ internal sealed class TuiArguments
         string? configPath = null;
         var noColor = false;
         var offlineStrict = false;
+        var theme = TuiTheme.DefaultName;
 
         for (var i = 0; i < args.Length; i++)
         {
@@ -29,6 +31,9 @@ internal sealed class TuiArguments
                     break;
                 case "--config" when i + 1 < args.Length:
                     configPath = args[++i];
+                    break;
+                case "--theme" when i + 1 < args.Length:
+                    theme = args[++i];
                     break;
                 case "--no-color":
                     noColor = true;
@@ -45,7 +50,8 @@ internal sealed class TuiArguments
             Workspace = workspace,
             ConfigPath = configPath,
             NoColor = noColor,
-            OfflineStrict = offlineStrict
+            OfflineStrict = offlineStrict,
+            Theme = theme
         };
     }
 }
