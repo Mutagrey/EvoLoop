@@ -18,6 +18,7 @@ internal static class SearchMemoryPatchTests
         ("Patch service undo validates snapshot before replacing directory", TestPatchServiceUndoValidatesSnapshotBeforeReplacingDirectory),
         ("Workspace snapshot diff reports file mutation evidence", TestWorkspaceSnapshotDiffReportsFileMutationEvidence),
         ("Workspace snapshot diff reports directory deletion evidence", TestWorkspaceSnapshotDiffReportsDirectoryDeletionEvidence),
+        ("Workspace snapshot diff summarizes multiple mutations", TestWorkspaceSnapshotDiffSummarizesMultipleMutations),
         ("Workspace snapshot diff fails explicitly without manifest", TestWorkspaceSnapshotDiffFailsWithoutManifest),
         ("Jsonl event log writes typed events", TestJsonlEventLogWritesTypedEvents)
     };
@@ -419,6 +420,63 @@ static async Task TestWorkspaceSnapshotDiffReportsDirectoryDeletionEvidence()
         Assert(diffResult.StdOut?.Contains("snapshot_entries:", StringComparison.Ordinal) == true, "Expected snapshot entries section.");
         Assert(diffResult.StdOut?.Contains("before.txt", StringComparison.Ordinal) == true, "Expected deleted file in snapshot entries.");
         Assert(diffResult.StdOut?.Contains("current_entries:", StringComparison.Ordinal) == true, "Expected current entries section.");
+    }
+    finally
+    {
+        if (Directory.Exists(workspace))
+        {
+            Directory.Delete(workspace, true);
+        }
+    }
+}
+
+static async Task TestWorkspaceSnapshotDiffSummarizesMultipleMutations()
+{
+    var workspace = Path.Combine(Path.GetTempPath(), "agent-snapshot-diff-multi-" + Guid.NewGuid().ToString("n"));
+    Directory.CreateDirectory(workspace);
+
+    try
+    {
+        await File.WriteAllTextAsync(Path.Combine(workspace, "notes.txt"), "alpha\nbeta\n");
+        var dataDir = Path.Combine(workspace, "data");
+        Directory.CreateDirectory(dataDir);
+        await File.WriteAllTextAsync(Path.Combine(dataDir, "before.txt"), "before");
+
+        var service = new WorkspacePatchService();
+        var context = CreatePatchContext(workspace, service);
+
+        var firstWrite = await service.WriteFileAsync(
+            new FileWriteRequest("notes.txt", "alpha\ngamma\n", true, null),
+            context,
+            CancellationToken.None);
+        Assert(firstWrite.Success, "Expected first mutation to succeed.");
+
+        var secondWrite = await service.WriteFileAsync(
+            new FileWriteRequest("src/App.cs", "class App { }\n", true, null),
+            context,
+            CancellationToken.None);
+        Assert(secondWrite.Success, "Expected second mutation to succeed.");
+
+        var deleteResult = await service.DeleteAsync(new FileDeleteRequest("data", true), context, CancellationToken.None);
+        Assert(deleteResult.Success, "Expected directory mutation to succeed.");
+
+        var diffResult = await new WorkspaceSnapshotDiffTool().ExecuteAsync(
+            new ToolCall("workspace_snapshot_diff", default, "test"),
+            context,
+            CancellationToken.None);
+
+        Assert(diffResult.Success, "Expected multi-mutation snapshot diff to succeed.");
+        Assert(diffResult.Message == "Snapshot workspace diff produced.", "Expected workspace snapshot diff result.");
+        Assert(diffResult.StdOut?.Contains("mutation_count: 3", StringComparison.Ordinal) == true, "Expected mutation count summary.");
+        Assert(diffResult.StdOut?.Contains("unique_paths: 3", StringComparison.Ordinal) == true, "Expected unique path summary.");
+        Assert(diffResult.StdOut?.Contains("file_mutations: 2", StringComparison.Ordinal) == true, "Expected file mutation count.");
+        Assert(diffResult.StdOut?.Contains("directory_mutations: 1", StringComparison.Ordinal) == true, "Expected directory mutation count.");
+        Assert(diffResult.StdOut?.Contains("created_paths: 1", StringComparison.Ordinal) == true, "Expected created path count.");
+        Assert(diffResult.StdOut?.Contains("notes.txt", StringComparison.Ordinal) == true, "Expected first path in summary.");
+        Assert(diffResult.StdOut?.Contains("src/App.cs", StringComparison.Ordinal) == true, "Expected created file path in summary.");
+        Assert(diffResult.StdOut?.Contains("data", StringComparison.Ordinal) == true, "Expected deleted directory path in summary.");
+        Assert(diffResult.StdOut?.Contains("change_state: created", StringComparison.Ordinal) == true, "Expected created file state.");
+        Assert(diffResult.StdOut?.Contains("change_state: deleted", StringComparison.Ordinal) == true, "Expected deleted directory state.");
     }
     finally
     {

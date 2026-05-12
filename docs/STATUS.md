@@ -72,13 +72,14 @@ Ordered refactor work follows `docs/architecture/refactor-plan.md`; this file re
 - Hardened undo recovery so missing snapshots are detected before replacing the target path and file/directory type mismatches are handled explicitly.
 - Added deterministic coverage for local degraded review fallback: review can return snapshot evidence without model/git while normal run stays blocked.
 - Added Phase 9 coverage for snapshot diff evidence, missing snapshot manifests, directory deletion review evidence, and review-mode denials for mutations and shell execution.
+- Completed Phase 9 safety/test cleanup with config loading, offline-strict override, and local-only degraded-mode coverage.
+- Added append-only mutation snapshot history and multi-file `workspace_snapshot_diff` summaries for local review fallback.
 
 ## Current Problems
 
 - No packaged Windows smoke test has been executed yet against the new `win-x64` publish path.
 - The agent still depends on a remote/local model gateway for autonomous `run` and `plan` execution; `local-only degraded` mode is still diagnostic-safe, not a replacement for a local model runtime.
 - `dotnet run --project tests/Agent.Tests/Agent.Tests.csproj` can still hang in this macOS workspace while spawning MSBuild child nodes; build the solution first and run the compiled test DLL directly as documented in `docs/TESTING.md`.
-- Snapshot diff output is currently optimized for the most recent mutation, not for a full multi-file workspace review baseline.
 - The checked-in Windows release bundle binaries are stale CLI-only snapshots and have not been regenerated for the new `Agent.Tui` executable yet.
 - TUI approval uses a basic blocking dialog; review-specific diff navigation is not implemented yet.
 
@@ -86,8 +87,6 @@ Ordered refactor work follows `docs/architecture/refactor-plan.md`; this file re
 
 - Resolve the executable-project build hang in this macOS workspace and re-run the full test harness.
 - Smoke-test the self-contained Windows artifact on a restricted non-admin machine.
-- Add richer review summarization for multi-file snapshot diffs and directory deletions.
-- Add tests for the remaining Phase 9 config loading/degraded-mode gap listed in `docs/architecture/refactor-plan.md`.
 - Exercise native tool calling against real corporate OpenAI-compatible gateways in all supported modes.
 - Regenerate or smoke-test the tracked Windows bundles before using `release/windows` as a TUI-capable release.
 - Add TUI review-specific diff navigation.

@@ -49,7 +49,7 @@ Smoke test on target machine:
 - missing `git` -> git tools fail explicitly, not with unhandled process errors
 - `plan` mode -> mutating tools and `exec_shell` are denied
 - `review` mode with `git` -> review uses git evidence without mutating workspace
-- `review` mode without `git` -> review falls back to `workspace_snapshot_diff`
+- `review` mode without `git` -> review falls back to `workspace_snapshot_diff`, including multi-file snapshot history
 - `fs_patch` -> built-in patch apply works without `git`
 - `workspace_undo` -> most recent file mutation is reversible from snapshot storage
 - protected paths like `.env` or `.git/config` -> mutation denied by policy/path safety

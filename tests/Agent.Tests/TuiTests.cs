@@ -320,6 +320,11 @@ static async Task TestAgentTaskRunnerLocalSnapshotReviewFallback()
             NullEventLog.Instance);
         var patchResult = await host.PatchService.ApplyPatchAsync(new FilePatchRequest("notes.txt", patch, null, null), toolContext, CancellationToken.None);
         Assert(patchResult.Success, "Expected patch setup to create snapshot evidence.");
+        var writeResult = await host.PatchService.WriteFileAsync(
+            new FileWriteRequest("src/App.cs", "class App { }\n", true, null),
+            toolContext,
+            CancellationToken.None);
+        Assert(writeResult.Success, "Expected second mutation to create multi-file snapshot evidence.");
 
         var runner = new AgentTaskRunner(host, context);
         var review = await runner.RunAsync(
@@ -334,6 +339,8 @@ static async Task TestAgentTaskRunnerLocalSnapshotReviewFallback()
         Assert(review.Result.SessionId == "local-review", "Expected local review session id.");
         Assert(review.LocalReviewSummary is not null, "Expected local review summary.");
         var summary = review.LocalReviewSummary ?? string.Empty;
+        Assert(summary.Contains("Snapshot workspace diff produced.", StringComparison.Ordinal), "Expected workspace snapshot diff summary.");
+        Assert(summary.Contains("unique_paths: 2", StringComparison.Ordinal), "Expected multi-file snapshot evidence.");
         Assert(summary.Contains("snapshot_hash", StringComparison.Ordinal), "Expected snapshot diff evidence.");
         Assert(summary.Contains("current_hash", StringComparison.Ordinal), "Expected current file evidence.");
 

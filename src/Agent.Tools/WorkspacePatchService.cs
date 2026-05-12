@@ -255,6 +255,7 @@ public sealed class WorkspacePatchService : IPatchService
 
         var manifest = new MutationSnapshotManifest(relativePath, existedBefore, isDirectory, snapshotPath, DateTimeOffset.UtcNow);
         await MutationSnapshotManifestStore.WriteAsync(workspaceRoot, manifest, ct);
+        await MutationSnapshotManifestStore.AppendHistoryAsync(workspaceRoot, manifest, ct);
         return manifest;
     }
 

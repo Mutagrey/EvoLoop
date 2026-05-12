@@ -142,6 +142,7 @@ Native tool support is never assumed. Provider-specific payloads and parsing sta
 
 - File writes, patches, and deletes go through the patch service instead of raw `git apply`.
 - Every mutation captures a snapshot under `.evoloop/storage/snapshots`.
+- Snapshot history is append-only in the Tools layer and powers multi-file `workspace_snapshot_diff` review summaries.
 - The latest mutation can be reverted via `workspace_undo` or REPL `/undo`.
 - Protected paths such as `.git/config`, hooks, SSH material, and `.env*` are denied by path safety rules.
 

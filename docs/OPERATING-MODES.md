@@ -58,7 +58,7 @@ Behavior:
 Behavior:
 - review current changes without mutating the workspace
 - prefer `git_diff` when `git` is available
-- otherwise use `workspace_snapshot_diff` against `.evoloop/storage/snapshots`
+- otherwise use `workspace_snapshot_diff` against `.evoloop/storage/snapshots`, including multi-file snapshot history when available
 - if model access is unavailable, CLI can still emit a local review summary from git or snapshot evidence
 
 ## Approval Modes

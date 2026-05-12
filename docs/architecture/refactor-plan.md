@@ -82,7 +82,7 @@ This plan is ordered for small, low-risk cleanup batches. Do not start feature e
 ## Phase 9: Tests And Safety Checks
 
 - [x] Preserve current lightweight in-repo harness.
-- [ ] Keep/add tests for:
+- [x] Keep/add tests for:
   - [x] path safety and symlink traversal
   - [x] patch/undo and snapshot storage failures
   - [x] undo failure recovery
@@ -91,7 +91,7 @@ This plan is ordered for small, low-risk cleanup batches. Do not start feature e
   - [x] shell command policy
   - [x] JSON-ReAct and plain-text recovery
   - [x] native non-streaming and streaming tool calls
-  - [ ] config loading and degraded mode
+  - [x] config loading and degraded mode
   - [x] review-mode local degraded fallback behavior
   - [x] provider formatting/fallback behavior
   - [x] TUI command/transcript behavior
