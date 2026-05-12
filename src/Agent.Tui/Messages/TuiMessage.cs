@@ -16,6 +16,7 @@ internal sealed record TuiMessage(
 {
     public static TuiMessage System(string content) => new(TuiMessageRole.System, content, DateTimeOffset.UtcNow);
     public static TuiMessage User(string content) => new(TuiMessageRole.User, content, DateTimeOffset.UtcNow);
+    public static TuiMessage Assistant(string content) => new(TuiMessageRole.Assistant, content, DateTimeOffset.UtcNow);
     public static TuiMessage Error(string content) => new(TuiMessageRole.Error, content, DateTimeOffset.UtcNow);
     public static TuiMessage Status(string content) => new(TuiMessageRole.Status, content, DateTimeOffset.UtcNow);
 }

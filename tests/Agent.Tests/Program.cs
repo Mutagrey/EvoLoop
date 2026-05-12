@@ -19,6 +19,8 @@ var tests = new List<(string Name, Func<Task> Run)>
     ("TUI theme resolves default and no-color variants", TestTuiThemeResolution),
     ("TUI app records pending-agent message", TestTuiAppRecordsPendingAgentMessage),
     ("TUI app reports unknown slash command", TestTuiUnknownSlashCommand),
+    ("TUI runtime observer records agent events", TestTuiRuntimeObserverRecordsEvents),
+    ("TUI approval service records default rejection", TestTuiApprovalServiceRecordsDefaultRejection),
     ("TUI transcript renderer formats roles", TestTuiTranscriptRenderer),
     ("Policy denies outside workspace", TestPolicyDeniesOutsideWorkspace),
     ("Policy denies sibling path prefix bypass", TestPolicyDeniesSiblingPrefixBypass),
@@ -187,6 +189,37 @@ static Task TestTuiUnknownSlashCommand()
     Assert(app.Messages.Last().Role == TuiMessageRole.Error, "Expected unknown command to append an error message.");
     Assert(app.Messages.Last().Content.Contains("Unknown command", StringComparison.Ordinal), "Expected unknown command details.");
     return Task.CompletedTask;
+}
+
+static async Task TestTuiRuntimeObserverRecordsEvents()
+{
+    var app = CreateTestTuiApp();
+    var observer = new TuiRuntimeObserver(app);
+
+    await observer.OnEventAsync(new AgentRunEvent(
+        AgentRunEventType.ToolExecutionCompleted,
+        "read src/Agent.Tui/TuiApp.cs",
+        2,
+        "fs_read"), CancellationToken.None);
+
+    Assert(app.StatusLine.Contains("ToolExecutionCompleted", StringComparison.Ordinal), "Expected status line to reflect the latest runtime event.");
+    Assert(app.Messages.Last().Role == TuiMessageRole.Status, "Expected runtime event to append a status message.");
+    Assert(app.Messages.Last().Content.Contains("fs_read", StringComparison.Ordinal), "Expected runtime event to include tool name.");
+}
+
+static async Task TestTuiApprovalServiceRecordsDefaultRejection()
+{
+    var app = CreateTestTuiApp();
+    var approval = new TuiApprovalService(app);
+
+    var approved = await approval.RequestApprovalAsync(new ApprovalRequest(
+        "fs_write",
+        "write requested",
+        "{\"path\":\"x\"}"), CancellationToken.None);
+
+    Assert(!approved, "Expected default TUI approval service to reject until an interactive prompt is wired.");
+    Assert(app.Messages.Any(m => m.Content.Contains("approval required: fs_write", StringComparison.Ordinal)), "Expected approval request in transcript.");
+    Assert(app.Messages.Last().Content.Contains("rejected: fs_write", StringComparison.Ordinal), "Expected rejection result in transcript.");
 }
 
 static Task TestTuiTranscriptRenderer()

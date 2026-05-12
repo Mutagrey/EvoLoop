@@ -75,7 +75,7 @@ This plan is ordered for small, low-risk cleanup batches. Do not start feature e
 
 - [x] Move CLI local degraded review fallback out of `CliSession` into a shared application/hosting service.
 - [x] Keep CLI rendering in CLI and Terminal.Gui rendering in TUI.
-- [ ] Add a TUI runtime observer and approval implementation only after event data is structured enough.
+- [x] Add a TUI runtime observer and approval implementation only after event data is structured enough.
 - [x] Do not make `Agent.Tui` depend on `Agent.Cli`.
 - [x] Do not move Terminal.Gui types outside `Agent.Tui`.
 

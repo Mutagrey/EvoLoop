@@ -62,6 +62,7 @@ Ordered refactor work follows `docs/architecture/refactor-plan.md`; this file re
 - Completed Phase 6 prompt and skill cleanup without prompt behavior changes: source-of-truth doc loading and progressive skill indexing now live in focused context helpers.
 - Completed Phase 7 storage/session cleanup: split canonical JSONL stores from the SQLite projection, centralized event type names, and documented JSONL as the source for future session-tree views.
 - Started Phase 8 UI/TUI boundary cleanup by moving local degraded review fallback into `Agent.Hosting` while keeping rendering in CLI/TUI-specific layers.
+- Completed Phase 8 UI/TUI boundary cleanup by adding TUI-local runtime observer and approval adapters without making `Agent.Tui` depend on `Agent.Cli` or moving Terminal.Gui types outside TUI.
 
 ## Current Problems
 
@@ -80,4 +81,4 @@ Ordered refactor work follows `docs/architecture/refactor-plan.md`; this file re
 - Add tests for non-writable snapshot storage, undo failure recovery, and review-mode fallback behavior.
 - Exercise native tool calling against real corporate OpenAI-compatible gateways in all supported modes.
 - Regenerate or smoke-test the tracked Windows bundles before using `release/windows` as a TUI-capable release.
-- Connect `Agent.Tui` input to the existing agent runtime event flow after the minimal shell is stable.
+- Connect `Agent.Tui` input to the existing agent runtime event flow using the TUI-local observer and approval adapters.
