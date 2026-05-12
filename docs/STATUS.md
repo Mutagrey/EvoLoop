@@ -67,6 +67,7 @@ Ordered refactor work follows `docs/architecture/refactor-plan.md`; this file re
 - Started Phase 9 safety/test cleanup with focused TUI dispatch tests for plain input, `/plan <task>`, and `/review [focus]`.
 - Added a basic Terminal.Gui approve/reject dialog for TUI runtime approval requests.
 - Added compact TUI runtime event formatting so tool, approval, model, and session events no longer render as raw enum names.
+- Added structured TUI approval previews for file writes and patches, including path plus diff/content preview.
 
 ## Current Problems
 
@@ -75,7 +76,7 @@ Ordered refactor work follows `docs/architecture/refactor-plan.md`; this file re
 - `dotnet run --project tests/Agent.Tests/Agent.Tests.csproj` can still hang in this macOS workspace while spawning MSBuild child nodes; build the solution first and run the compiled test DLL directly as documented in `docs/TESTING.md`.
 - Snapshot diff output is currently optimized for the most recent mutation, not for a full multi-file workspace review baseline.
 - The checked-in Windows release bundle binaries are stale CLI-only snapshots and have not been regenerated for the new `Agent.Tui` executable yet.
-- TUI approval uses a basic blocking dialog; diff rendering is not implemented yet.
+- TUI approval uses a basic blocking dialog; review-specific diff navigation is not implemented yet.
 
 ## Next Improvements
 
@@ -85,4 +86,4 @@ Ordered refactor work follows `docs/architecture/refactor-plan.md`; this file re
 - Add tests for non-writable snapshot storage, undo failure recovery, and review-mode fallback behavior.
 - Exercise native tool calling against real corporate OpenAI-compatible gateways in all supported modes.
 - Regenerate or smoke-test the tracked Windows bundles before using `release/windows` as a TUI-capable release.
-- Add TUI diff rendering for approval and review flows.
+- Add TUI review-specific diff navigation.

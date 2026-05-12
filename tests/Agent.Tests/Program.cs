@@ -28,6 +28,8 @@ var tests = new List<(string Name, Func<Task> Run)>
     ("TUI runtime formatter renders approval and completion events", TestTuiRuntimeFormatterApprovalAndCompletionEvents),
     ("TUI approval service records default rejection", TestTuiApprovalServiceRecordsDefaultRejection),
     ("TUI approval service uses attached prompt", TestTuiApprovalServiceUsesAttachedPrompt),
+    ("TUI approval formatter renders patch diff", TestTuiApprovalFormatterPatchDiff),
+    ("TUI approval formatter renders write content preview", TestTuiApprovalFormatterWriteContentPreview),
     ("TUI transcript renderer formats roles", TestTuiTranscriptRenderer),
     ("Policy denies outside workspace", TestPolicyDeniesOutsideWorkspace),
     ("Policy denies sibling path prefix bypass", TestPolicyDeniesSiblingPrefixBypass),
@@ -333,6 +335,40 @@ static async Task TestTuiApprovalServiceUsesAttachedPrompt()
 
     Assert(approved, "Expected attached TUI approval prompt to approve.");
     Assert(app.Messages.Last().Content.Contains("approved: fs_write", StringComparison.Ordinal), "Expected approval result in transcript.");
+}
+
+static Task TestTuiApprovalFormatterPatchDiff()
+{
+    var preview = TuiApprovalRequestFormatter.FormatForDialog(new ApprovalRequest(
+        "fs_patch",
+        "update file",
+        "{\"path\":\"src/App.cs\",\"unified_diff\":\"--- a/src/App.cs\\n+++ b/src/App.cs\\n@@ -1 +1 @@\\n-old\\n+new\"}"));
+
+    Assert(preview.Contains("Tool: fs_patch", StringComparison.Ordinal), "Expected tool name.");
+    Assert(preview.Contains("Path: src/App.cs", StringComparison.Ordinal), "Expected path.");
+    Assert(preview.Contains("Diff:", StringComparison.Ordinal), "Expected diff heading.");
+    Assert(preview.Contains("+new", StringComparison.Ordinal), "Expected diff content.");
+    return Task.CompletedTask;
+}
+
+static Task TestTuiApprovalFormatterWriteContentPreview()
+{
+    var preview = TuiApprovalRequestFormatter.FormatForDialog(new ApprovalRequest(
+        "fs_write",
+        "write file",
+        "{\"path\":\"notes.txt\",\"content\":\"line one\\nline two\"}"));
+
+    Assert(preview.Contains("Path: notes.txt", StringComparison.Ordinal), "Expected path.");
+    Assert(preview.Contains("Content preview:", StringComparison.Ordinal), "Expected content preview heading.");
+    Assert(preview.Contains("line two", StringComparison.Ordinal), "Expected content preview.");
+
+    var fallback = TuiApprovalRequestFormatter.FormatForDialog(new ApprovalRequest(
+        "custom",
+        "raw",
+        "not json"));
+    Assert(fallback.Contains("Arguments:", StringComparison.Ordinal), "Expected raw arguments heading.");
+    Assert(fallback.Contains("not json", StringComparison.Ordinal), "Expected raw arguments.");
+    return Task.CompletedTask;
 }
 
 static Task TestTuiTranscriptRenderer()

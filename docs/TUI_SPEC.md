@@ -21,6 +21,7 @@ Implemented:
 - theme layer with `claude-dark` and `mono`
 - TUI-local runtime observer and approval adapter connected to the shared `Agent.Hosting` runtime path
 - basic Terminal.Gui approve/reject dialog for runtime approval requests
+- structured approval previews for file write and patch requests
 - compact runtime event formatting for model, tool, approval, memory, and session status lines
 
 Normal text runs through the shared agent runtime in `run` mode. `/plan <task>` runs in read-only plan mode. `/review [focus]` runs review mode and can use the local degraded review fallback when model execution is unavailable.

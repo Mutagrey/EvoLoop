@@ -53,5 +53,5 @@ dotnet run --project src/Agent.Tui --
 
 ## Known Limitations
 
-- Approval requests use a basic blocking approve/reject dialog.
-- No diff view, session list, or slash suggestion popup yet.
+- Approval requests use a basic blocking approve/reject dialog with path and diff/content previews for file writes and patches.
+- No review diff navigation, session list, or slash suggestion popup yet.

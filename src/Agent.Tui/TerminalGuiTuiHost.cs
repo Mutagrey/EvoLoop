@@ -223,10 +223,7 @@ internal sealed class TerminalGuiTuiHost
 
             Application.MainLoop.Invoke(() =>
             {
-                var message =
-                    $"Tool: {request.ToolName}\n" +
-                    $"Reason: {request.Reason}\n\n" +
-                    $"Arguments:\n{Clip(request.ArgumentsPreview, 1600)}";
+                var message = TuiApprovalRequestFormatter.FormatForDialog(request, 1600);
                 var result = MessageBox.Query("Approval Required", message, "Approve", "Reject");
                 tcs.TrySetResult(result == 0);
                 RefreshTranscript();
@@ -248,13 +245,4 @@ internal sealed class TerminalGuiTuiHost
         }
     }
 
-    private static string Clip(string value, int maxLength)
-    {
-        if (string.IsNullOrEmpty(value) || value.Length <= maxLength)
-        {
-            return value;
-        }
-
-        return value[..Math.Max(0, maxLength - 3)] + "...";
-    }
 }
