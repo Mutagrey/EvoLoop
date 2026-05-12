@@ -20,6 +20,8 @@ Implemented:
 - Terminal.Gui shell with transcript, input line, status bar, `/help`, `/status`, `/plan`, `/review`, and `/exit`
 - theme layer with `claude-dark` and `mono`
 - TUI-local runtime observer and approval adapter connected to the shared `Agent.Hosting` runtime path
+- basic Terminal.Gui approve/reject dialog for runtime approval requests
+- compact runtime event formatting for model, tool, approval, memory, and session status lines
 
 Normal text runs through the shared agent runtime in `run` mode. `/plan <task>` runs in read-only plan mode. `/review [focus]` runs review mode and can use the local degraded review fallback when model execution is unavailable.
 
@@ -70,4 +72,4 @@ Default styling is a dark terminal palette: black background, gray text, muted c
 
 ## Next Implementation Phase
 
-Add an interactive approval prompt and richer tool activity rendering without changing Core, Tools, Providers, or Storage ownership.
+Add richer tool activity rendering without changing Core, Tools, Providers, or Storage ownership.

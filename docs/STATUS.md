@@ -65,6 +65,8 @@ Ordered refactor work follows `docs/architecture/refactor-plan.md`; this file re
 - Completed Phase 8 UI/TUI boundary cleanup by adding TUI-local runtime observer and approval adapters without making `Agent.Tui` depend on `Agent.Cli` or moving Terminal.Gui types outside TUI.
 - Connected `Agent.Tui` input to `AgentTaskRunner`: plain text runs `run`, `/plan <task>` runs read-only plan mode, and `/review [focus]` runs review mode through the shared hosting/runtime path.
 - Started Phase 9 safety/test cleanup with focused TUI dispatch tests for plain input, `/plan <task>`, and `/review [focus]`.
+- Added a basic Terminal.Gui approve/reject dialog for TUI runtime approval requests.
+- Added compact TUI runtime event formatting so tool, approval, model, and session events no longer render as raw enum names.
 
 ## Current Problems
 
@@ -73,7 +75,7 @@ Ordered refactor work follows `docs/architecture/refactor-plan.md`; this file re
 - `dotnet run --project tests/Agent.Tests/Agent.Tests.csproj` can still hang in this macOS workspace while spawning MSBuild child nodes; build the solution first and run the compiled test DLL directly as documented in `docs/TESTING.md`.
 - Snapshot diff output is currently optimized for the most recent mutation, not for a full multi-file workspace review baseline.
 - The checked-in Windows release bundle binaries are stale CLI-only snapshots and have not been regenerated for the new `Agent.Tui` executable yet.
-- TUI approval requests are recorded and rejected by default until an interactive approval prompt is added.
+- TUI approval uses a basic blocking dialog; diff rendering is not implemented yet.
 
 ## Next Improvements
 
@@ -83,4 +85,4 @@ Ordered refactor work follows `docs/architecture/refactor-plan.md`; this file re
 - Add tests for non-writable snapshot storage, undo failure recovery, and review-mode fallback behavior.
 - Exercise native tool calling against real corporate OpenAI-compatible gateways in all supported modes.
 - Regenerate or smoke-test the tracked Windows bundles before using `release/windows` as a TUI-capable release.
-- Add an interactive TUI approval prompt and richer tool activity rendering.
+- Add TUI diff rendering for approval and review flows.

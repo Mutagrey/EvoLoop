@@ -52,7 +52,7 @@ Events and UI:
 
 - Runtime emits `AgentRunEvent` values to `IAgentRunObserver`.
 - CLI renders these with `SpinnerObserver`.
-- TUI has its own transcript, slash command model, runtime observer, and approval bridge. Approval requests are recorded and rejected by default until an interactive prompt is added.
+- TUI has its own transcript, slash command model, runtime observer, approval bridge, and a basic approve/reject dialog.
 
 ## Current Problems
 

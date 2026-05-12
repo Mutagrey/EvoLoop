@@ -19,7 +19,7 @@ public static class Program
             var app = new TuiApp(
                 TuiRuntimeInfo.From(context, command, theme.Name),
                 SlashCommandRegistry.CreateDefault());
-            using var host = AgentExecutionHost.Create(context, new TuiApprovalService(app));
+            using var host = AgentExecutionHost.Create(context, new TuiApprovalService(app, app.RequestApprovalAsync));
             app.AttachTaskRunner(new TuiTaskRunner(new AgentTaskRunner(host, context)));
             new TerminalGuiTuiHost(theme).Run(app);
             return 0;

@@ -1,3 +1,4 @@
+using Agent.Core;
 using Terminal.Gui;
 
 namespace Agent.Tui;
@@ -143,6 +144,7 @@ internal sealed class TerminalGuiTuiHost
         }
 
         app.Changed += () => Application.MainLoop.Invoke(RefreshTranscript);
+        app.AttachApprovalPrompt(ShowApprovalDialogAsync);
 
         void Stop()
         {
@@ -213,6 +215,25 @@ internal sealed class TerminalGuiTuiHost
         root.Add(title, profile, mode, cwdLabel, cwd, separator, transcript, prompt, input, status);
         top.Add(root);
         input.SetFocus();
+
+        async Task<bool> ShowApprovalDialogAsync(ApprovalRequest request, CancellationToken ct)
+        {
+            var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            using var registration = ct.Register(() => tcs.TrySetCanceled(ct));
+
+            Application.MainLoop.Invoke(() =>
+            {
+                var message =
+                    $"Tool: {request.ToolName}\n" +
+                    $"Reason: {request.Reason}\n\n" +
+                    $"Arguments:\n{Clip(request.ArgumentsPreview, 1600)}";
+                var result = MessageBox.Query("Approval Required", message, "Approve", "Reject");
+                tcs.TrySetResult(result == 0);
+                RefreshTranscript();
+            });
+
+            return await tcs.Task;
+        }
     }
 
     private static int SafeConsoleWidth()
@@ -225,5 +246,15 @@ internal sealed class TerminalGuiTuiHost
         {
             return 100;
         }
+    }
+
+    private static string Clip(string value, int maxLength)
+    {
+        if (string.IsNullOrEmpty(value) || value.Length <= maxLength)
+        {
+            return value;
+        }
+
+        return value[..Math.Max(0, maxLength - 3)] + "...";
     }
 }

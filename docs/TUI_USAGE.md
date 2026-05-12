@@ -53,5 +53,5 @@ dotnet run --project src/Agent.Tui --
 
 ## Known Limitations
 
-- Approval requests are recorded and rejected by default until an interactive TUI approval prompt is added.
+- Approval requests use a basic blocking approve/reject dialog.
 - No diff view, session list, or slash suggestion popup yet.

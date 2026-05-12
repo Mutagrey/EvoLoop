@@ -12,6 +12,7 @@ internal sealed class TuiApp
     private AgentRunResult? _lastRun;
     private AgentRunResult? _lastPlan;
     private bool _taskRunning;
+    private Func<ApprovalRequest, CancellationToken, Task<bool>>? _approvalPrompt;
 
     public TuiApp(TuiRuntimeInfo runtime, SlashCommandRegistry commands)
     {
@@ -61,6 +62,11 @@ internal sealed class TuiApp
     public void AttachTaskRunner(ITuiTaskRunner taskRunner)
     {
         _taskRunner = taskRunner;
+    }
+
+    public void AttachApprovalPrompt(Func<ApprovalRequest, CancellationToken, Task<bool>> approvalPrompt)
+    {
+        _approvalPrompt = approvalPrompt;
     }
 
     public TuiCommandResult Submit(string input)
@@ -118,18 +124,11 @@ internal sealed class TuiApp
 
     public void RecordRuntimeEvent(AgentRunEvent evt)
     {
-        var text = FormatRuntimeEvent(evt);
+        var message = TuiRuntimeEventFormatter.Format(evt);
         lock (_sync)
         {
-            _activity = text;
-            _messages.Add(evt.Type switch
-            {
-                AgentRunEventType.Error => TuiMessage.Error(text),
-                AgentRunEventType.SessionCompleted => TuiMessage.Assistant(text),
-                AgentRunEventType.PolicyDenied => TuiMessage.Error(text),
-                AgentRunEventType.ApprovalRejected => TuiMessage.Error(text),
-                _ => TuiMessage.Status(text)
-            });
+            _activity = message.Content;
+            _messages.Add(message);
         }
 
         Changed?.Invoke();
@@ -157,6 +156,12 @@ internal sealed class TuiApp
         }
 
         Changed?.Invoke();
+    }
+
+    public Task<bool> RequestApprovalAsync(ApprovalRequest request, CancellationToken ct)
+    {
+        var prompt = _approvalPrompt;
+        return prompt is null ? Task.FromResult(false) : prompt(request, ct);
     }
 
     private void AddStartupMessages()
@@ -199,13 +204,6 @@ internal sealed class TuiApp
         }
 
         Changed?.Invoke();
-    }
-
-    private static string FormatRuntimeEvent(AgentRunEvent evt)
-    {
-        var prefix = evt.Step.HasValue ? $"step {evt.Step.Value}: " : string.Empty;
-        var tool = string.IsNullOrWhiteSpace(evt.ToolName) ? string.Empty : $" [{evt.ToolName}]";
-        return $"{prefix}{evt.Type}{tool}: {evt.Message}";
     }
 
     private async Task<TuiCommandResult> RunTaskAsync(
