@@ -68,6 +68,9 @@ Ordered refactor work follows `docs/architecture/refactor-plan.md`; this file re
 - Added a basic Terminal.Gui approve/reject dialog for TUI runtime approval requests.
 - Added compact TUI runtime event formatting so tool, approval, model, and session events no longer render as raw enum names.
 - Added structured TUI approval previews for file writes and patches, including path plus diff/content preview.
+- Hardened patch/write/delete mutation flow so unavailable snapshot storage returns an explicit error before workspace mutation.
+- Hardened undo recovery so missing snapshots are detected before replacing the target path and file/directory type mismatches are handled explicitly.
+- Added deterministic coverage for local degraded review fallback: review can return snapshot evidence without model/git while normal run stays blocked.
 
 ## Current Problems
 
@@ -83,7 +86,7 @@ Ordered refactor work follows `docs/architecture/refactor-plan.md`; this file re
 - Resolve the executable-project build hang in this macOS workspace and re-run the full test harness.
 - Smoke-test the self-contained Windows artifact on a restricted non-admin machine.
 - Add richer review summarization for multi-file snapshot diffs and directory deletions.
-- Add tests for non-writable snapshot storage, undo failure recovery, and review-mode fallback behavior.
+- Add tests for remaining Phase 9 safety gaps listed in `docs/architecture/refactor-plan.md`.
 - Exercise native tool calling against real corporate OpenAI-compatible gateways in all supported modes.
 - Regenerate or smoke-test the tracked Windows bundles before using `release/windows` as a TUI-capable release.
 - Add TUI review-specific diff navigation.

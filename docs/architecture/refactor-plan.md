@@ -84,12 +84,15 @@ This plan is ordered for small, low-risk cleanup batches. Do not start feature e
 - [ ] Preserve current lightweight in-repo harness.
 - [ ] Keep/add tests for:
   - path safety and symlink traversal
-  - patch/undo and snapshot diff
+  - [x] patch/undo and snapshot storage failures
+  - [x] undo failure recovery
+  - snapshot diff
   - plan/review mode denials
   - shell command policy
   - JSON-ReAct and plain-text recovery
   - native non-streaming and streaming tool calls
   - config loading and degraded mode
+  - [x] review-mode local degraded fallback behavior
   - provider formatting/fallback behavior
   - [x] TUI command/transcript behavior
 - [ ] Use the documented build-then-run-DLL workaround if `dotnet run --project tests/Agent.Tests` hangs.

@@ -4,7 +4,7 @@ namespace Agent.Hosting;
 
 public sealed class AgentRuntimeContext
 {
-    private AgentRuntimeContext(
+    internal AgentRuntimeContext(
         string requestedWorkspace,
         string workspace,
         AgentConfig config,

@@ -23,7 +23,13 @@ public sealed class WorkspacePatchService : IPatchService
             }
         }
 
-        var snapshot = await CaptureSnapshotAsync(context.WorkspaceRoot, request.Path, ct);
+        var snapshotResult = await TryCaptureSnapshotAsync(context.WorkspaceRoot, request.Path, ct);
+        if (!snapshotResult.Success)
+        {
+            return snapshotResult.Error;
+        }
+
+        var snapshot = snapshotResult.Manifest;
         var directory = Path.GetDirectoryName(fullPath);
         if (!string.IsNullOrWhiteSpace(directory))
         {
@@ -69,7 +75,13 @@ public sealed class WorkspacePatchService : IPatchService
             return new ToolResult(false, "Provide unified_diff or content.");
         }
 
-        var snapshot = await CaptureSnapshotAsync(context.WorkspaceRoot, request.Path, ct);
+        var snapshotResult = await TryCaptureSnapshotAsync(context.WorkspaceRoot, request.Path, ct);
+        if (!snapshotResult.Success)
+        {
+            return snapshotResult.Error;
+        }
+
+        var snapshot = snapshotResult.Manifest;
         var directory = Path.GetDirectoryName(fullPath);
         if (!string.IsNullOrWhiteSpace(directory))
         {
@@ -84,7 +96,13 @@ public sealed class WorkspacePatchService : IPatchService
     public async Task<ToolResult> DeleteAsync(FileDeleteRequest request, ToolContext context, CancellationToken ct)
     {
         var fullPath = ToolPath.ResolveInWorkspace(context.WorkspaceRoot, request.Path, requireExistingPath: true, allowProtectedPaths: false);
-        var snapshot = await CaptureSnapshotAsync(context.WorkspaceRoot, request.Path, ct);
+        var snapshotResult = await TryCaptureSnapshotAsync(context.WorkspaceRoot, request.Path, ct);
+        if (!snapshotResult.Success)
+        {
+            return snapshotResult.Error;
+        }
+
+        var snapshot = snapshotResult.Manifest;
 
         if (File.Exists(fullPath))
         {
@@ -134,11 +152,21 @@ public sealed class WorkspacePatchService : IPatchService
         var targetPath = ToolPath.ResolveInWorkspace(workspaceRoot, manifest.RelativePath, requireExistingPath: false, allowProtectedPaths: false);
         try
         {
+            var validationError = ValidateUndoSnapshot(manifest);
+            if (validationError is not null)
+            {
+                return new ToolResult(false, validationError);
+            }
+
             if (manifest.ExistedBefore)
             {
                 if (manifest.IsDirectory)
                 {
-                    if (Directory.Exists(targetPath))
+                    if (File.Exists(targetPath))
+                    {
+                        File.Delete(targetPath);
+                    }
+                    else if (Directory.Exists(targetPath))
                     {
                         Directory.Delete(targetPath, true);
                     }
@@ -147,6 +175,11 @@ public sealed class WorkspacePatchService : IPatchService
                 }
                 else
                 {
+                    if (Directory.Exists(targetPath))
+                    {
+                        Directory.Delete(targetPath, true);
+                    }
+
                     var directory = Path.GetDirectoryName(targetPath);
                     if (!string.IsNullOrWhiteSpace(directory))
                     {
@@ -177,6 +210,25 @@ public sealed class WorkspacePatchService : IPatchService
         }
     }
 
+    private static string? ValidateUndoSnapshot(MutationSnapshotManifest manifest)
+    {
+        if (!manifest.ExistedBefore)
+        {
+            return null;
+        }
+
+        if (manifest.IsDirectory)
+        {
+            return Directory.Exists(manifest.SnapshotPath)
+                ? null
+                : $"Undo failed: snapshot directory is missing: {manifest.SnapshotPath}";
+        }
+
+        return File.Exists(manifest.SnapshotPath)
+            ? null
+            : $"Undo failed: snapshot file is missing: {manifest.SnapshotPath}";
+    }
+
     private static async Task<MutationSnapshotManifest> CaptureSnapshotAsync(string workspaceRoot, string relativePath, CancellationToken ct)
     {
         var targetPath = ToolPath.ResolveInWorkspace(workspaceRoot, relativePath, requireExistingPath: false, allowProtectedPaths: false);
@@ -204,6 +256,18 @@ public sealed class WorkspacePatchService : IPatchService
         var manifest = new MutationSnapshotManifest(relativePath, existedBefore, isDirectory, snapshotPath, DateTimeOffset.UtcNow);
         await MutationSnapshotManifestStore.WriteAsync(workspaceRoot, manifest, ct);
         return manifest;
+    }
+
+    private static async Task<SnapshotCaptureResult> TryCaptureSnapshotAsync(string workspaceRoot, string relativePath, CancellationToken ct)
+    {
+        try
+        {
+            return SnapshotCaptureResult.Ok(await CaptureSnapshotAsync(workspaceRoot, relativePath, ct));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return SnapshotCaptureResult.Fail($"Snapshot storage unavailable: {ex.Message}");
+        }
     }
 
     private static async Task RecordMutationAsync(
@@ -383,5 +447,14 @@ public sealed class WorkspacePatchService : IPatchService
     {
         public static PatchApplyResult Ok(string content) => new(true, content, null);
         public static PatchApplyResult Fail(string error) => new(false, string.Empty, error);
+    }
+
+    private sealed record SnapshotCaptureResult(bool Success, MutationSnapshotManifest Manifest, ToolResult Error)
+    {
+        public static SnapshotCaptureResult Ok(MutationSnapshotManifest manifest)
+            => new(true, manifest, new ToolResult(true, string.Empty));
+
+        public static SnapshotCaptureResult Fail(string message)
+            => new(false, new MutationSnapshotManifest(string.Empty, false, false, string.Empty, DateTimeOffset.UtcNow), new ToolResult(false, message));
     }
 }
