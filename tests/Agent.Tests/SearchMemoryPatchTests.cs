@@ -16,6 +16,9 @@ internal static class SearchMemoryPatchTests
         ("Patch service applies diff and undo", TestPatchServiceAppliesDiffAndUndo),
         ("Patch service fails explicitly when snapshot storage is unavailable", TestPatchServiceFailsWhenSnapshotStorageUnavailable),
         ("Patch service undo validates snapshot before replacing directory", TestPatchServiceUndoValidatesSnapshotBeforeReplacingDirectory),
+        ("Workspace snapshot diff reports file mutation evidence", TestWorkspaceSnapshotDiffReportsFileMutationEvidence),
+        ("Workspace snapshot diff reports directory deletion evidence", TestWorkspaceSnapshotDiffReportsDirectoryDeletionEvidence),
+        ("Workspace snapshot diff fails explicitly without manifest", TestWorkspaceSnapshotDiffFailsWithoutManifest),
         ("Jsonl event log writes typed events", TestJsonlEventLogWritesTypedEvents)
     };
 
@@ -346,6 +349,112 @@ static async Task TestPatchServiceUndoValidatesSnapshotBeforeReplacingDirectory(
     }
 }
 
+static async Task TestWorkspaceSnapshotDiffReportsFileMutationEvidence()
+{
+    var workspace = Path.Combine(Path.GetTempPath(), "agent-snapshot-diff-file-" + Guid.NewGuid().ToString("n"));
+    Directory.CreateDirectory(workspace);
+
+    try
+    {
+        var filePath = Path.Combine(workspace, "notes.txt");
+        await File.WriteAllTextAsync(filePath, "alpha\nbeta\n");
+
+        var service = new WorkspacePatchService();
+        var context = CreatePatchContext(workspace, service);
+
+        var writeResult = await service.WriteFileAsync(
+            new FileWriteRequest("notes.txt", "alpha\ngamma\n", true, null),
+            context,
+            CancellationToken.None);
+        Assert(writeResult.Success, "Expected write to capture a mutation snapshot.");
+
+        var diffResult = await new WorkspaceSnapshotDiffTool().ExecuteAsync(
+            new ToolCall("workspace_snapshot_diff", default, "test"),
+            context,
+            CancellationToken.None);
+
+        Assert(diffResult.Success, "Expected snapshot diff to succeed after file mutation.");
+        Assert(diffResult.Message == "Snapshot file diff produced.", "Expected file snapshot diff result.");
+        Assert(diffResult.StdOut?.Contains("path: notes.txt", StringComparison.Ordinal) == true, "Expected diff output path.");
+        Assert(diffResult.StdOut?.Contains("snapshot_hash:", StringComparison.Ordinal) == true, "Expected snapshot hash evidence.");
+        Assert(diffResult.StdOut?.Contains("current_hash:", StringComparison.Ordinal) == true, "Expected current hash evidence.");
+        Assert(diffResult.StdOut?.Contains("beta", StringComparison.Ordinal) == true, "Expected previous content excerpt.");
+        Assert(diffResult.StdOut?.Contains("gamma", StringComparison.Ordinal) == true, "Expected current content excerpt.");
+    }
+    finally
+    {
+        if (Directory.Exists(workspace))
+        {
+            Directory.Delete(workspace, true);
+        }
+    }
+}
+
+static async Task TestWorkspaceSnapshotDiffReportsDirectoryDeletionEvidence()
+{
+    var workspace = Path.Combine(Path.GetTempPath(), "agent-snapshot-diff-dir-" + Guid.NewGuid().ToString("n"));
+    Directory.CreateDirectory(workspace);
+
+    try
+    {
+        var targetDir = Path.Combine(workspace, "data");
+        Directory.CreateDirectory(targetDir);
+        await File.WriteAllTextAsync(Path.Combine(targetDir, "before.txt"), "before");
+
+        var service = new WorkspacePatchService();
+        var context = CreatePatchContext(workspace, service);
+
+        var deleteResult = await service.DeleteAsync(new FileDeleteRequest("data", true), context, CancellationToken.None);
+        Assert(deleteResult.Success, "Expected directory delete to capture a mutation snapshot.");
+
+        var diffResult = await new WorkspaceSnapshotDiffTool().ExecuteAsync(
+            new ToolCall("workspace_snapshot_diff", default, "test"),
+            context,
+            CancellationToken.None);
+
+        Assert(diffResult.Success, "Expected snapshot diff to succeed after directory deletion.");
+        Assert(diffResult.Message == "Snapshot directory diff produced.", "Expected directory snapshot diff result.");
+        Assert(diffResult.StdOut?.Contains("path: data", StringComparison.Ordinal) == true, "Expected diff output path.");
+        Assert(diffResult.StdOut?.Contains("is_directory: True", StringComparison.Ordinal) == true, "Expected directory marker.");
+        Assert(diffResult.StdOut?.Contains("snapshot_entries:", StringComparison.Ordinal) == true, "Expected snapshot entries section.");
+        Assert(diffResult.StdOut?.Contains("before.txt", StringComparison.Ordinal) == true, "Expected deleted file in snapshot entries.");
+        Assert(diffResult.StdOut?.Contains("current_entries:", StringComparison.Ordinal) == true, "Expected current entries section.");
+    }
+    finally
+    {
+        if (Directory.Exists(workspace))
+        {
+            Directory.Delete(workspace, true);
+        }
+    }
+}
+
+static async Task TestWorkspaceSnapshotDiffFailsWithoutManifest()
+{
+    var workspace = Path.Combine(Path.GetTempPath(), "agent-snapshot-diff-empty-" + Guid.NewGuid().ToString("n"));
+    Directory.CreateDirectory(workspace);
+
+    try
+    {
+        var context = CreatePatchContext(workspace, new WorkspacePatchService());
+
+        var diffResult = await new WorkspaceSnapshotDiffTool().ExecuteAsync(
+            new ToolCall("workspace_snapshot_diff", default, "test"),
+            context,
+            CancellationToken.None);
+
+        Assert(!diffResult.Success, "Expected snapshot diff to fail without a manifest.");
+        Assert(diffResult.Message == "No snapshot manifest is available.", "Expected explicit missing manifest message.");
+    }
+    finally
+    {
+        if (Directory.Exists(workspace))
+        {
+            Directory.Delete(workspace, true);
+        }
+    }
+}
+
 static async Task TestJsonlEventLogWritesTypedEvents()
 {
     var workspace = Path.Combine(Path.GetTempPath(), "agent-event-log-" + Guid.NewGuid().ToString("n"));
@@ -377,4 +486,17 @@ static async Task TestJsonlEventLogWritesTypedEvents()
         }
     }
 }
+
+static ToolContext CreatePatchContext(string workspace, WorkspacePatchService service)
+    => new(
+        workspace,
+        "s1",
+        "reasoning",
+        AgentExecutionMode.Run,
+        ApprovalPolicyMode.WorkspaceWrite,
+        new AgentConfig(),
+        new NullSearchService(),
+        RuntimeCapabilities.Default,
+        service,
+        NullEventLog.Instance);
 }

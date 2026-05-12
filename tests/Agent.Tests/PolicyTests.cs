@@ -17,7 +17,8 @@ internal static class PolicyTests
         ("Policy denies protected path mutation", TestPolicyDeniesProtectedPathMutation),
         ("Offline strict denies non-approved network shell", TestOfflineStrictDeniesNetworkShell),
         ("Offline strict allows approved gateway host with approval", TestOfflineStrictAllowsApprovedHostWithApproval),
-        ("Plan mode blocks mutating tools", TestPlanModeBlocksMutatingTools)
+        ("Plan mode blocks mutating tools", TestPlanModeBlocksMutatingTools),
+        ("Review mode blocks mutating tools and shell", TestReviewModeBlocksMutatingToolsAndShell)
     };
 
 static Task TestPolicyDeniesOutsideWorkspace()
@@ -271,5 +272,33 @@ static async Task TestPlanModeBlocksMutatingTools()
     {
         Directory.Delete(temp, true);
     }
+}
+
+static Task TestReviewModeBlocksMutatingToolsAndShell()
+{
+    var config = new AgentConfig();
+    var policy = new DefaultPolicyEngine(new ITool[] { new FsWriteTool(), new ExecShellTool() }, config);
+    var context = new ToolContext(
+        "/tmp/workspace",
+        "s1",
+        "reasoning",
+        AgentExecutionMode.Review,
+        ApprovalPolicyMode.AutoEdit,
+        config,
+        new NullSearchService(),
+        RuntimeCapabilities.Default,
+        new WorkspacePatchService(),
+        NullEventLog.Instance);
+
+    using var writeDoc = JsonDocument.Parse("{\"path\":\"review.txt\",\"content\":\"x\"}");
+    var writeDecision = policy.Evaluate(new ToolCall("fs_write", writeDoc.RootElement.Clone(), "write"), context);
+    Assert(writeDecision.Kind == PolicyDecisionKind.Deny, "Expected review mode to deny workspace mutation.");
+    Assert(writeDecision.Reason.Contains("Review mode", StringComparison.Ordinal), "Expected review-mode denial reason.");
+
+    using var shellDoc = JsonDocument.Parse("{\"command\":\"git status\"}");
+    var shellDecision = policy.Evaluate(new ToolCall("exec_shell", shellDoc.RootElement.Clone(), "shell"), context);
+    Assert(shellDecision.Kind == PolicyDecisionKind.Deny, "Expected review mode to deny shell execution.");
+    Assert(shellDecision.Reason.Contains("Review mode", StringComparison.Ordinal), "Expected review-mode shell denial reason.");
+    return Task.CompletedTask;
 }
 }
