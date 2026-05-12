@@ -19,15 +19,15 @@ Secondary delivery mode:
 Runtime modes:
 - `full`: gateway reachable, normal model-backed execution
 - `offline-strict`: same as `full`, but network shell commands stay constrained by policy
-- `local-only degraded`: CLI starts, diagnostics/config/tools remain usable, but model-backed agent tasks are blocked with a clear message
+- `local-only degraded`: targets start, diagnostics/config/tools remain usable, but model-backed agent tasks are blocked with a clear message
 
 Model tool calling:
 - JSON-ReAct fallback remains the default for compatibility
 - OpenAI-compatible native non-streaming/streaming tools are available as opt-in profile modes
 
 Terminal behavior:
-- bare `agent` enters the prepared TUI path
-- `agent repl` keeps the old line-based interactive REPL
+- packaged `agent.cmd` starts the TUI target
+- packaged `agent-cli.cmd` starts the pure CLI target
 - ANSI-capable terminals use colored status output and live step spinner
 - plain Windows `cmd` falls back to plain ASCII output without ANSI escape noise
 
@@ -38,7 +38,9 @@ Details:
 
 ## Repository Layout
 
-- `src/Agent.Cli`: entrypoint, CLI/TUI dispatch, REPL, diagnostics, startup mode selection
+- `src/Agent.Tui`: TUI executable target
+- `src/Agent.Cli`: pure CLI executable target, REPL, diagnostics, command dispatch
+- `src/Agent.Hosting`: shared startup, capability probing, and agent wiring
 - `src/Agent.Core`: contracts, orchestration, policy, capability model
 - `src/Agent.Tools`: file, git, shell, and search tools
 - `src/Agent.Providers`: model gateway clients
@@ -52,8 +54,9 @@ Details:
 Packaged Windows usage:
 
 ```powershell
-.\agent.cmd doctor
-.\agent.cmd run "inspect repository and summarize current issues"
+.\agent.cmd
+.\agent-cli.cmd doctor
+.\agent-cli.cmd run "inspect repository and summarize current issues"
 ```
 
 Source usage on a build/developer machine:
@@ -61,7 +64,7 @@ Source usage on a build/developer machine:
 ```bash
 dotnet run --project src/Agent.Cli -- doctor
 dotnet run --project src/Agent.Cli -- run "inspect repository and summarize current issues"
-dotnet run --project src/Agent.Cli --
+dotnet run --project src/Agent.Tui --
 ```
 
 If `.tooling/dotnet8` exists, the helper scripts automatically prefer that local SDK instead of a system-wide install.
@@ -115,14 +118,13 @@ This refreshes the committed bundles in:
 ## Commands
 
 CLI:
-- `agent`
-- `agent tui`
-- `agent repl`
-- `agent doctor`
-- `agent run "<task>"`
-- `agent plan "<task>"`
-- `agent review`
-- `agent --offline-strict`
+- `agent.cmd`
+- `agent-cli.cmd doctor`
+- `agent-cli.cmd run "<task>"`
+- `agent-cli.cmd plan "<task>"`
+- `agent-cli.cmd review`
+- `agent-cli.cmd repl`
+- `agent-cli.cmd --offline-strict`
 
 REPL:
 - `/task <text>`

@@ -10,8 +10,12 @@ EvoLoop is a model-backed coding agent CLI with explicit fallback behavior for r
 
 ## Components
 
+- `Agent.Tui`
+  TUI executable target. Current implementation is a prepared placeholder for the future Terminal.Gui shell.
 - `Agent.Cli`
-  Startup, CLI parsing, TUI/REPL dispatch, `doctor`, command dispatch for `run`, `plan`, and `review`, degraded-mode gating.
+  Pure CLI executable target: argument parsing, REPL, `doctor`, command dispatch for `run`, `plan`, and `review`.
+- `Agent.Hosting`
+  Shared startup, workspace resolution, config loading, capability probing, degraded-mode gating, and agent wiring used by both executables.
 - `Agent.Core`
   Contracts, execution modes, approval policy, normalized message/tool-call model, model adapter contracts, ReAct-compatible runtime loop, prompt/context builders, tool-turn orchestration, runtime capability model.
 - `Agent.Tools`
@@ -109,9 +113,9 @@ Native tool support is never assumed. Provider-specific payloads and parsing sta
 - `review`
   Inspection-only execution. The agent should prefer `git_diff` when `git` exists and `workspace_snapshot_diff` otherwise.
 - `tui`
-  Default interactive surface reached by bare `agent` or `agent tui`. Current implementation is a prepared placeholder.
+  Interactive surface owned by the separate `Agent.Tui` executable. Current implementation is a prepared placeholder.
 - `repl`
-  Legacy line-based REPL surface reached by `agent repl`; it can dispatch `run`, `plan`, and `review` turns.
+  Legacy line-based REPL surface reached through the `Agent.Cli` executable; it can dispatch `run`, `plan`, and `review` turns.
 
 ## Operating Contract
 
@@ -153,7 +157,7 @@ Skills use progressive disclosure only. At startup the context builder scans `.e
 
 ## Boundaries
 
-- CLI decides whether TUI, REPL, diagnostics, or single-turn execution starts.
+- Executable targets decide whether TUI, REPL, diagnostics, or single-turn execution starts.
 - Core decides how the agent loop behaves and how prompt/context/policy/tool execution are composed.
 - Tools do not guess capability state; they read it from `ToolContext`.
 - Providers do not know about workspace policy.
@@ -162,7 +166,8 @@ Skills use progressive disclosure only. At startup the context builder scans `.e
 
 ## Development Guardrails
 
-- `Agent.Cli` stays a thin host: argument parsing, config loading, capability probing, dependency wiring, and dispatch. REPL/session flows belong in focused internal classes.
+- `Agent.Cli` stays a thin pure CLI host: argument parsing and dispatch only. Shared startup/wiring belongs in `Agent.Hosting`; REPL/session flows belong in focused internal classes.
+- `Agent.Tui` must not depend on `Agent.Cli`; shared behavior belongs in `Agent.Hosting`.
 - `Agent.Core` owns contracts, policy, path safety, runtime capabilities, normalized messages, prompt/context construction, and ReAct orchestration.
 - `Agent.Tools` owns local tool implementations only. Tools must use `ToolContext` for capabilities, patch service, search service, event logging, and workspace root.
 - `Agent.Providers` owns model gateway protocol adaptation only. It must not inspect workspace paths, approvals, or command policy.

@@ -1,14 +1,10 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
-    <ProjectReference Include="..\Agent.Hosting\Agent.Hosting.csproj" />
     <ProjectReference Include="..\Agent.Core\Agent.Core.csproj" />
     <ProjectReference Include="..\Agent.Tools\Agent.Tools.csproj" />
     <ProjectReference Include="..\Agent.Providers\Agent.Providers.csproj" />
+    <ProjectReference Include="..\Agent.Storage\Agent.Storage.csproj" />
   </ItemGroup>
-
-  <PropertyGroup>
-    <OutputType>Exe</OutputType>
-  </PropertyGroup>
 
 </Project>

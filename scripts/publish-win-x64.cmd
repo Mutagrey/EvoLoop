@@ -21,8 +21,24 @@ if exist "%REPO_ROOT%\.tooling\dotnet8\dotnet.exe" (
     /p:PublishSingleFile=true ^
     /p:IncludeNativeLibrariesForSelfExtract=true ^
     -o "%OUTPUT_DIR%"
+  if errorlevel 1 exit /b 1
+  "%REPO_ROOT%\.tooling\dotnet8\dotnet.exe" publish "%REPO_ROOT%\src\Agent.Tui\Agent.Tui.csproj" ^
+    -c Release ^
+    -r win-x64 ^
+    --self-contained true ^
+    /p:PublishSingleFile=true ^
+    /p:IncludeNativeLibrariesForSelfExtract=true ^
+    -o "%OUTPUT_DIR%"
 ) else (
   dotnet publish "%REPO_ROOT%\src\Agent.Cli\Agent.Cli.csproj" ^
+    -c Release ^
+    -r win-x64 ^
+    --self-contained true ^
+    /p:PublishSingleFile=true ^
+    /p:IncludeNativeLibrariesForSelfExtract=true ^
+    -o "%OUTPUT_DIR%"
+  if errorlevel 1 exit /b 1
+  dotnet publish "%REPO_ROOT%\src\Agent.Tui\Agent.Tui.csproj" ^
     -c Release ^
     -r win-x64 ^
     --self-contained true ^

@@ -21,6 +21,14 @@ if [[ -x "$repo_root/.tooling/dotnet8/dotnet" ]]; then
     /p:IncludeNativeLibrariesForSelfExtract=true \
     --disable-build-servers -nr:false /m:1 \
     -o "$repo_root/artifacts/publish/win-arm64"
+  "$repo_root/.tooling/dotnet8/dotnet" publish "$repo_root/src/Agent.Tui/Agent.Tui.csproj" \
+    -c Release \
+    -r win-arm64 \
+    --self-contained true \
+    /p:PublishSingleFile=true \
+    /p:IncludeNativeLibrariesForSelfExtract=true \
+    --disable-build-servers -nr:false /m:1 \
+    -o "$repo_root/artifacts/publish/win-arm64"
 else
   echo "Local .NET 8 SDK not found in .tooling/dotnet8; cannot prepare tracked Windows bundles." >&2
   exit 1
@@ -28,14 +36,22 @@ fi
 
 mkdir -p "$release_root/win-x64" "$release_root/win-arm64"
 cp "$repo_root/artifacts/publish/win-x64/Agent.Cli.exe" "$release_root/win-x64/"
+cp "$repo_root/artifacts/publish/win-x64/Agent.Tui.exe" "$release_root/win-x64/"
 cp "$repo_root/artifacts/publish/win-x64/"*.pdb "$release_root/win-x64/"
 cp "$repo_root/artifacts/publish/win-arm64/Agent.Cli.exe" "$release_root/win-arm64/"
+cp "$repo_root/artifacts/publish/win-arm64/Agent.Tui.exe" "$release_root/win-arm64/"
 cp "$repo_root/artifacts/publish/win-arm64/"*.pdb "$release_root/win-arm64/"
 cp "$repo_root/config/corporate.offline.config.json" "$release_root/win-x64/config.json.example"
 cp "$repo_root/config/corporate.offline.config.json" "$release_root/win-arm64/config.json.example"
 
 for target in win-x64 win-arm64; do
   cat > "$release_root/$target/agent.cmd" <<'EOF'
+@echo off
+setlocal
+"%~dp0Agent.Tui.exe" --workspace "%cd%" %*
+endlocal
+EOF
+  cat > "$release_root/$target/agent-cli.cmd" <<'EOF'
 @echo off
 setlocal
 "%~dp0Agent.Cli.exe" --workspace "%cd%" %*

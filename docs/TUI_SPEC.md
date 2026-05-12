@@ -2,21 +2,22 @@
 
 ## Summary
 
-The main interactive terminal surface is `agent` with no subcommand. Explicit command-line modes remain available through `agent run`, `agent plan`, `agent review`, `agent doctor`, and `agent repl`.
+The main interactive terminal surface is the separate `Agent.Tui` executable. Pure command-line operation stays in the separate `Agent.Cli` executable.
 
-The TUI is owned by the CLI layer. Agent execution, policy, tools, providers, and storage remain in their existing layers.
+Shared startup and agent wiring live in `Agent.Hosting`. Agent execution, policy, tools, providers, and storage remain in their existing layers.
 
 ## First Target
 
 Current implementation target:
 
-- prepare the CLI/TUI split without a second executable
-- make bare `agent` enter the TUI path
-- keep the old line REPL available as `agent repl`
+- split CLI and TUI into separate executable targets
+- keep packaged `agent.cmd` as the TUI wrapper
+- add packaged `agent-cli.cmd` as the pure CLI wrapper
+- keep the old line REPL in `Agent.Cli`
 - vendor the TUI dependency packages for later offline restore
 - do not implement the full TUI shell yet
 
-The current TUI path is a placeholder that reports the workspace, profile, runtime mode, and available explicit commands.
+The current TUI executable is a placeholder that reports the workspace, profile, runtime mode, and available explicit commands.
 
 ## Dependency Policy
 
@@ -33,16 +34,15 @@ Prepared dependency:
 Expected commands:
 
 ```bash
-agent
-agent tui
-agent repl
-agent doctor
-agent run "task"
-agent plan "task"
-agent review
+dotnet run --project src/Agent.Tui --
+dotnet run --project src/Agent.Cli -- doctor
+dotnet run --project src/Agent.Cli -- run "task"
+dotnet run --project src/Agent.Cli -- plan "task"
+dotnet run --project src/Agent.Cli -- review
+dotnet run --project src/Agent.Cli -- repl
 ```
 
-`agent tui` is kept as an explicit alias for the default TUI path.
+Packaged Windows wrappers should map `agent.cmd` to `Agent.Tui.exe` and `agent-cli.cmd` to `Agent.Cli.exe`.
 
 ## Next Implementation Phase
 

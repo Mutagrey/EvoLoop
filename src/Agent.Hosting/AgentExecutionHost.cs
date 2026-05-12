@@ -3,9 +3,9 @@ using Agent.Providers;
 using Agent.Storage;
 using Agent.Tools;
 
-namespace Agent.Cli;
+namespace Agent.Hosting;
 
-internal sealed class AgentExecutionHost : IDisposable
+public sealed class AgentExecutionHost : IDisposable
 {
     private readonly ModelClientRouter? _liveRouter;
 
@@ -28,7 +28,7 @@ internal sealed class AgentExecutionHost : IDisposable
     public IWorkspaceMemoryStore MemoryStore { get; }
     public IPatchService PatchService { get; }
 
-    public static AgentExecutionHost Create(CliRuntimeContext context)
+    public static AgentExecutionHost Create(AgentRuntimeContext context, IApprovalService approval)
     {
         ModelClientRouter? liveRouter = null;
         IModelClientRouter modelRouter;
@@ -51,7 +51,6 @@ internal sealed class AgentExecutionHost : IDisposable
         var searchService = new HybridSearchService(modelRouter, context.Config, context.Workspace);
         var contextFactory = new DefaultToolContextFactory(context.Config, searchService, patchService, eventLog, context.Capabilities);
         var policy = new DefaultPolicyEngine(tools, context.Config);
-        var approval = new ConsoleApprovalService(context.Renderer);
         IEventStore eventStore = context.Capabilities.WorkspaceWritable
             ? new HybridEventStore(context.Workspace)
             : NullEventStore.Instance;

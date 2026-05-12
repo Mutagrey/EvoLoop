@@ -28,3 +28,11 @@ fi
   /p:PublishSingleFile=true \
   /p:IncludeNativeLibrariesForSelfExtract=true \
   -o "$output_dir"
+
+"$dotnet_bin" publish "$repo_root/src/Agent.Tui/Agent.Tui.csproj" \
+  -c Release \
+  -r win-x64 \
+  --self-contained true \
+  /p:PublishSingleFile=true \
+  /p:IncludeNativeLibrariesForSelfExtract=true \
+  -o "$output_dir"

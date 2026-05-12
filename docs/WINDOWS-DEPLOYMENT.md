@@ -19,7 +19,7 @@ scripts\publish-win-x64.cmd
 Output:
 - `artifacts\publish\win-x64\`
 
-The publish script produces a self-contained single-file executable layout suitable for copy-and-run distribution.
+The publish script produces a self-contained layout with separate TUI and CLI executables suitable for copy-and-run distribution.
 
 If you want GitHub to contain committed ready-to-run Windows files, use:
 
@@ -40,7 +40,8 @@ That refreshes:
 
 ## Recommended Bundle Contents
 
-- published executable
+- `Agent.Tui.exe` with `agent.cmd`
+- `Agent.Cli.exe` with `agent-cli.cmd`
 - `config\corporate.offline.config.json` as a starting template
 - project-local docs that matter operationally:
   - `README.md`
@@ -50,7 +51,8 @@ That refreshes:
 ## First Run
 
 ```powershell
-.\agent.cmd doctor
+.\agent.cmd
+.\agent-cli.cmd doctor
 ```
 
 Use `doctor` before task execution to confirm:

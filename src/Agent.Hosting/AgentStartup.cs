@@ -1,9 +1,9 @@
 using Agent.Core;
 using Agent.Tools;
 
-namespace Agent.Cli;
+namespace Agent.Hosting;
 
-internal static class CliStartup
+public static class AgentStartup
 {
     public static void ApplyPrivacyDefaults()
     {
@@ -51,9 +51,9 @@ internal static class CliStartup
         }
     }
 
-    public static AgentConfig BuildEffectiveConfig(AgentConfig loadedConfig, CliArguments command)
+    public static AgentConfig BuildEffectiveConfig(AgentConfig loadedConfig, bool offlineStrict)
     {
-        if (!command.OfflineStrict)
+        if (!offlineStrict)
         {
             return loadedConfig;
         }

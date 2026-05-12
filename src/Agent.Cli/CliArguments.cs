@@ -1,10 +1,7 @@
-using Agent.Core;
-
 namespace Agent.Cli;
 
 internal enum CliMode
 {
-    Tui,
     Repl,
     Run,
     Plan,
@@ -14,7 +11,7 @@ internal enum CliMode
 
 internal sealed class CliArguments
 {
-    public CliMode Mode { get; init; } = CliMode.Tui;
+    public CliMode Mode { get; init; } = CliMode.Repl;
     public string? Task { get; init; }
     public string Profile { get; init; } = "reasoning";
     public string? Workspace { get; init; }
@@ -24,7 +21,7 @@ internal sealed class CliArguments
 
     public static CliArguments Parse(string[] args)
     {
-        var mode = CliMode.Tui;
+        var mode = CliMode.Repl;
         string? task = null;
         var profile = "reasoning";
         string? workspace = null;
@@ -66,11 +63,6 @@ internal sealed class CliArguments
         else if (args.Length > 0 && args[0].Equals("doctor", StringComparison.OrdinalIgnoreCase))
         {
             mode = CliMode.Doctor;
-            i = 1;
-        }
-        else if (args.Length > 0 && args[0].Equals("tui", StringComparison.OrdinalIgnoreCase))
-        {
-            mode = CliMode.Tui;
             i = 1;
         }
         else if (args.Length > 0 &&

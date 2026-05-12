@@ -17,7 +17,7 @@ export NUGET_PACKAGES="$repo_root/.tooling/nuget"
 "$repo_root/scripts/build-agent.sh" >/dev/null
 
 if [[ -x "$local_dotnet" ]]; then
-  "$local_dotnet" run --project "$repo_root/src/Agent.Cli" --no-build -- "$@"
+  "$local_dotnet" run --project "$repo_root/src/Agent.Tui" --no-build -- "$@"
 else
-  dotnet run --project "$repo_root/src/Agent.Cli" -- "$@"
+  dotnet run --project "$repo_root/src/Agent.Tui" -- "$@"
 fi

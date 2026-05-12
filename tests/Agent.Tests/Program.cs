@@ -11,7 +11,7 @@ AssemblyLoadContext.Default.Resolving += ResolveFromOutput;
 
 var tests = new List<(string Name, Func<Task> Run)>
 {
-    ("CLI parser defaults to TUI and preserves explicit modes", TestCliParserModes),
+    ("CLI parser defaults to REPL and preserves explicit modes", TestCliParserModes),
     ("Policy denies outside workspace", TestPolicyDeniesOutsideWorkspace),
     ("Policy denies sibling path prefix bypass", TestPolicyDeniesSiblingPrefixBypass),
     ("Policy denies exec_shell cwd outside workspace", TestPolicyDeniesExecShellCwdOutsideWorkspace),
@@ -95,16 +95,14 @@ static Assembly? ResolveFromOutput(AssemblyLoadContext context, AssemblyName nam
 static Task TestCliParserModes()
 {
     var empty = CliArguments.Parse(Array.Empty<string>());
-    Assert(empty.Mode == CliMode.Tui, "Expected bare agent to start TUI.");
-
-    var tui = CliArguments.Parse(new[] { "tui", "--workspace", ".", "--model", "fast" });
-    Assert(tui.Mode == CliMode.Tui, "Expected explicit tui mode.");
-    Assert(tui.Workspace == ".", "Expected workspace option to be parsed.");
-    Assert(tui.Profile == "fast", "Expected --model to map to profile.");
+    Assert(empty.Mode == CliMode.Repl, "Expected bare CLI target to start REPL.");
 
     var repl = CliArguments.Parse(new[] { "repl", "--profile", "reasoning" });
     Assert(repl.Mode == CliMode.Repl, "Expected repl mode.");
     Assert(repl.Profile == "reasoning", "Expected profile option to be parsed.");
+
+    var modelAlias = CliArguments.Parse(new[] { "run", "inspect", "--model", "fast" });
+    Assert(modelAlias.Profile == "fast", "Expected --model to map to profile.");
 
     var run = CliArguments.Parse(new[] { "run", "inspect", "--offline-strict" });
     Assert(run.Mode == CliMode.Run, "Expected run mode.");

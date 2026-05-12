@@ -12,7 +12,7 @@ set NUGET_PACKAGES=%~dp0..\.tooling\nuget
 
 if exist "%~dp0..\.tooling\dotnet8\dotnet.exe" (
   call "%~dp0build-agent.cmd" >nul
-  "%~dp0..\.tooling\dotnet8\dotnet.exe" run --project "%~dp0..\src\Agent.Cli" --no-build -- %*
+  "%~dp0..\.tooling\dotnet8\dotnet.exe" run --project "%~dp0..\src\Agent.Tui" --no-build -- %*
 ) else (
-  dotnet run --project "%~dp0..\src\Agent.Cli" -- %*
+  dotnet run --project "%~dp0..\src\Agent.Tui" -- %*
 )
