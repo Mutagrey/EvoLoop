@@ -83,8 +83,12 @@ Local Ollama profile example:
     "reasoning": {
       "provider": "ollama",
       "model": "qwen3.5:9b",
+      "maxTokens": 4096,
       "toolCallingMode": "JsonReActFallback"
     }
+  },
+  "runtime": {
+    "maxSteps": 120
   }
 }
 ```

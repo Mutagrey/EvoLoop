@@ -5,7 +5,6 @@ repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 local_dotnet="$repo_root/.tooling/dotnet8/dotnet"
 local_home="$repo_root/.tooling/home"
 
-export HOME="$local_home"
 export DOTNET_CLI_HOME="$local_home"
 export DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1
 export DOTNET_CLI_TELEMETRY_OPTOUT=1

@@ -76,7 +76,7 @@ public sealed class SafetyConfig
 public sealed class RuntimeConfig
 {
     public List<string> ProfileFallbackOrder { get; init; } = new();
-    public int MaxSteps { get; init; } = 30;
+    public int MaxSteps { get; init; } = 120;
     public int MaxInvalidModelResponses { get; init; } = 6;
     public int MaxConsecutiveFinalWithoutTools { get; init; } = 5;
     public int InvalidResponsesBeforeProfileSwitch { get; init; } = 2;

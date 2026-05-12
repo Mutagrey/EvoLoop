@@ -79,6 +79,8 @@ Ordered refactor work follows `docs/architecture/refactor-plan.md`; this file re
 - Added Pi-inspired prompt files: global/workspace `SYSTEM.md`, `APPEND_SYSTEM.md`, and indexed workspace prompt templates under `.evoloop/prompts/*.md`.
 - Added TUI `/config`, `/config path`, `/config open`, and `/config reload` commands with grouped settings and runtime reload wiring.
 - Added an `ollama` model provider for local `/api/chat` with `think=false`, and verified `qwen3.5:9b` through a read-only `fs_read` agent flow.
+- Raised the default ReAct step budget to 120 because JSON-ReAct fallback normally executes one tool per model turn.
+- Stopped run scripts from overriding `HOME` so user-level config such as `~/.evoloop-agent/config.json` is visible when launching `agent`.
 
 ## Current Problems
 

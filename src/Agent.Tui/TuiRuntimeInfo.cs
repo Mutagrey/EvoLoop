@@ -94,7 +94,7 @@ internal sealed record TuiRuntimeInfo(
             true,
             false,
             false,
-            30,
+            120,
             6,
             5,
             2,
