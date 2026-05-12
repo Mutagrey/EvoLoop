@@ -106,6 +106,10 @@ internal sealed class DefaultToolTurnExecutor : IToolTurnExecutor
             result = new ToolResult(false, $"Tool threw exception: {ex.Message}");
         }
         stopwatch.Stop();
+        var activity = ToolActivityMetadata.Build(request.Tool.Name, request.Call.Arguments, result);
+        var completionMessage = activity.TryGetValue(ToolActivityMetadata.SummaryKey, out var summary)
+            ? summary
+            : result.Message;
 
         var stepRecord = new SessionStep(
             request.Context.SessionId,
@@ -126,13 +130,15 @@ internal sealed class DefaultToolTurnExecutor : IToolTurnExecutor
             DateTimeOffset.UtcNow,
             result.Message,
             request.Tool.Name,
-            result.Success), ct);
+            result.Success,
+            activity), ct);
 
         await request.Observer.OnEventAsync(new AgentRunEvent(
             AgentRunEventType.ToolExecutionCompleted,
-            result.Message,
+            completionMessage,
             request.Step,
-            request.Tool.Name), ct);
+            request.Tool.Name,
+            activity), ct);
 
         return new ToolTurnExecutionResult(true, result.Success, result, stepRecord);
     }

@@ -60,10 +60,9 @@ Events and UI:
 - `CliSession` mixes REPL command parsing, local degraded review fallback, runtime task dispatch, config formatting, command history, and undo.
 - `Agent.Core` is not pure runtime logic. It directly reads files, directories, environment variables, and starts capability probe processes.
 - Provider clients duplicate prompt fallback, response-format fallback, success-code checks, message shaping, and JSON-ReAct fallback wrapping.
-- Tool/workspace concerns are split awkwardly: `PathSafety` is in Core, `ToolPath` is in Tools, and path scanning rules are duplicated in search and ReAct path hints.
-- Snapshot manifest shape is duplicated in `WorkspacePatchService` and `WorkspaceSnapshotDiffTool`.
+- Tool/workspace concerns are split awkwardly: `PathSafety` is in Core and `ToolPath` is in Tools.
 - Small string/path helpers are duplicated: `CommandExists`, auth detection, `ToOneLine`, `NormalizePath`, and `Clip`.
-- `SpinnerObserver` infers activity by parsing user-facing tool result text, which couples UI summaries to exact tool messages.
+- Tool activity summaries now travel as event metadata, while some older UI fallback parsing remains for compatibility.
 - TUI docs now point to one canonical source per topic, but tracked release bundles still contain older CLI-only artifacts.
 - `release/windows` contains large tracked binaries by design, but they are a high-churn area and currently out of sync with the TUI target.
 - Tests use one large custom harness file, which makes ownership harder as subsystems grow.
@@ -88,12 +87,6 @@ No definitely removable production code was confirmed in this audit. The remaini
   - `OpenAiCompatibleClient.SendWithPromptFallbackAsync`
   - `CustomGatewayClient.SendWithPromptFallbackAsync`
   - response-format fallback and `IsSuccessStatusCode` in both clients.
-- Duplicate snapshot manifest records:
-  - `WorkspacePatchService.MutationSnapshotManifest`
-  - `WorkspaceSnapshotDiffTool.MutationSnapshotManifest`
-- Duplicate path scanning rules:
-  - `SafeWorkspaceFileEnumerator`
-  - `ReActPathHints.ShouldSkipPathScan` and related binary extension logic.
 - Stale documented state:
   - minimal TUI is intentionally pending integration.
   - checked-in Windows bundles have not been regenerated for `Agent.Tui`.
@@ -105,7 +98,7 @@ No definitely removable production code was confirmed in this audit. The remaini
 - Providers both send HTTP requests and partially own model-format policy/fallback mechanics.
 - Tools own both business operation and low-level filesystem/process calls.
 - Storage handles canonical JSONL and sqlite projection in one file.
-- UI observer parses tool result strings to derive activity summaries instead of consuming structured file/command/search events.
+- UI observer consumes structured tool activity event metadata first and keeps string parsing only as a compatibility fallback.
 
 ## Risk Areas
 

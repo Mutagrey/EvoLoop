@@ -38,12 +38,12 @@ This plan is ordered for small, low-risk cleanup batches. Do not start feature e
 
 ## Phase 4: Tool System Cleanup
 
-- [ ] Keep `ToolCatalog.CreateDefaultTools()` as the single default registry path until real configurability is needed.
-- [ ] Centralize workspace path scan skip rules used by fallback search and ReAct path hints.
-- [ ] Centralize mutation snapshot manifest shape used by patch/undo and snapshot diff.
-- [ ] Keep `exec_shell` fallback-only and policy-controlled.
-- [ ] Add structured activity metadata to tool results or events so UI does not parse result strings.
-- [ ] Do not add new tools during cleanup unless required to replace unsafe shell usage.
+- [x] Keep `ToolCatalog.CreateDefaultTools()` as the single default registry path until real configurability is needed.
+- [x] Centralize workspace path scan skip rules used by fallback search and ReAct path hints.
+- [x] Centralize mutation snapshot manifest shape used by patch/undo and snapshot diff.
+- [x] Keep `exec_shell` fallback-only and policy-controlled.
+- [x] Add structured activity metadata to tool results or events so UI does not parse result strings.
+- [x] Do not add new tools during cleanup unless required to replace unsafe shell usage.
 
 ## Phase 5: LLM Adapter Cleanup
 

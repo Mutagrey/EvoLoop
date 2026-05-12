@@ -1,14 +1,11 @@
 using System.Security.Cryptography;
 using System.Text;
-using System.Text.Json;
 using Agent.Core;
 
 namespace Agent.Tools;
 
 public sealed class WorkspacePatchService : IPatchService
 {
-    private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
-
     public async Task<ToolResult> WriteFileAsync(FileWriteRequest request, ToolContext context, CancellationToken ct)
     {
         var fullPath = ToolPath.ResolveInWorkspace(context.WorkspaceRoot, request.Path, requireExistingPath: false, allowProtectedPaths: false);
@@ -113,7 +110,7 @@ public sealed class WorkspacePatchService : IPatchService
 
     public async Task<ToolResult> UndoLastAsync(string workspaceRoot, CancellationToken ct)
     {
-        var manifestPath = GetManifestPath(workspaceRoot);
+        var manifestPath = MutationSnapshotManifestStore.GetManifestPath(workspaceRoot);
         if (!File.Exists(manifestPath))
         {
             return new ToolResult(false, "No mutation snapshot is available for undo.");
@@ -122,7 +119,7 @@ public sealed class WorkspacePatchService : IPatchService
         MutationSnapshotManifest? manifest;
         try
         {
-            manifest = JsonSerializer.Deserialize<MutationSnapshotManifest>(await File.ReadAllTextAsync(manifestPath, ct), JsonOptions);
+            manifest = await MutationSnapshotManifestStore.ReadAsync(workspaceRoot, ct);
         }
         catch (Exception ex)
         {
@@ -205,7 +202,7 @@ public sealed class WorkspacePatchService : IPatchService
         }
 
         var manifest = new MutationSnapshotManifest(relativePath, existedBefore, isDirectory, snapshotPath, DateTimeOffset.UtcNow);
-        await File.WriteAllTextAsync(GetManifestPath(workspaceRoot), JsonSerializer.Serialize(manifest, JsonOptions), Encoding.UTF8, ct);
+        await MutationSnapshotManifestStore.WriteAsync(workspaceRoot, manifest, ct);
         return manifest;
     }
 
@@ -364,9 +361,6 @@ public sealed class WorkspacePatchService : IPatchService
         return Convert.ToHexString(hash);
     }
 
-    private static string GetManifestPath(string workspaceRoot)
-        => Path.Combine(workspaceRoot, ".evoloop", "storage", "snapshots", "last-mutation.json");
-
     private static void CopyDirectory(string sourcePath, string destinationPath)
     {
         Directory.CreateDirectory(destinationPath);
@@ -384,13 +378,6 @@ public sealed class WorkspacePatchService : IPatchService
             File.Copy(file, destinationFile, overwrite: true);
         }
     }
-
-    private sealed record MutationSnapshotManifest(
-        string RelativePath,
-        bool ExistedBefore,
-        bool IsDirectory,
-        string SnapshotPath,
-        DateTimeOffset CapturedAtUtc);
 
     private sealed record PatchApplyResult(bool Success, string Content, string? ErrorMessage)
     {

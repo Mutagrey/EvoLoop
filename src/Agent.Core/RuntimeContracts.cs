@@ -100,7 +100,12 @@ public sealed record AgentRunResult(
     string SessionId,
     IReadOnlyList<SessionStep> StepTrace);
 
-public sealed record AgentRunEvent(AgentRunEventType Type, string Message, int? Step = null, string? ToolName = null);
+public sealed record AgentRunEvent(
+    AgentRunEventType Type,
+    string Message,
+    int? Step = null,
+    string? ToolName = null,
+    IReadOnlyDictionary<string, string>? Metadata = null);
 
 public enum AgentRunEventType
 {

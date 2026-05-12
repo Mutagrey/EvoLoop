@@ -93,10 +93,10 @@ internal sealed class SpinnerObserver : IAgentRunObserver, IDisposable
                 _renderer.WriteStatus(
                     "RESULT",
                     evt.Message,
-                    evt.Message.Contains("failed", StringComparison.OrdinalIgnoreCase) ? ConsoleColor.Red : ConsoleColor.Green,
+                    IsFailedActivity(evt.Metadata, evt.Message) ? ConsoleColor.Red : ConsoleColor.Green,
                     depth: 2,
                     isLast: true);
-                TrackActivity(evt.Message);
+                TrackActivity(evt.Message, evt.Metadata);
                 break;
             case AgentRunEventType.MemoryUpdated:
                 _renderer.WriteStatus("MEMORY", evt.Message, ConsoleColor.DarkCyan);
@@ -351,15 +351,24 @@ internal sealed class SpinnerObserver : IAgentRunObserver, IDisposable
         }
     }
 
-    private void TrackActivity(string message)
+    private void TrackActivity(string message, IReadOnlyDictionary<string, string>? metadata)
     {
         if (string.IsNullOrWhiteSpace(message))
         {
             return;
         }
 
-        var normalized = ToOneLine(message, 220);
+        var normalized = ToOneLine(
+            TryGetMetadata(metadata, ToolActivityMetadata.SummaryKey) ?? message,
+            220);
         _activityFeed.Add(normalized);
+
+        var kind = TryGetMetadata(metadata, ToolActivityMetadata.KindKey);
+        if (!string.IsNullOrWhiteSpace(kind))
+        {
+            TrackStructuredActivity(kind, metadata);
+            return;
+        }
 
         if (normalized.StartsWith("Read ", StringComparison.OrdinalIgnoreCase))
         {
@@ -418,6 +427,49 @@ internal sealed class SpinnerObserver : IAgentRunObserver, IDisposable
             }
         }
     }
+
+    private void TrackStructuredActivity(string kind, IReadOnlyDictionary<string, string>? metadata)
+    {
+        var path = TryGetMetadata(metadata, ToolActivityMetadata.PathKey);
+        var query = TryGetMetadata(metadata, ToolActivityMetadata.QueryKey);
+        var command = TryGetMetadata(metadata, ToolActivityMetadata.CommandKey);
+        var summary = TryGetMetadata(metadata, ToolActivityMetadata.SummaryKey);
+
+        switch (kind)
+        {
+            case "read":
+                if (!string.IsNullOrWhiteSpace(path))
+                {
+                    _readFiles.Add(NormalizePath(path));
+                }
+                break;
+            case "edit":
+                if (!string.IsNullOrWhiteSpace(path))
+                {
+                    _editedFiles.Add(NormalizePath(path));
+                }
+                break;
+            case "search":
+                _searchNotes.Add(summary ?? $"Searched {query}");
+                break;
+            case "explore":
+                _exploreNotes.Add(summary ?? "Explored workspace");
+                break;
+            case "command":
+                if (!string.IsNullOrWhiteSpace(command))
+                {
+                    _ranCommands.Add(command);
+                }
+                break;
+        }
+    }
+
+    private static bool IsFailedActivity(IReadOnlyDictionary<string, string>? metadata, string message)
+        => TryGetMetadata(metadata, ToolActivityMetadata.SuccessKey)?.Equals("false", StringComparison.OrdinalIgnoreCase) == true ||
+           message.Contains("failed", StringComparison.OrdinalIgnoreCase);
+
+    private static string? TryGetMetadata(IReadOnlyDictionary<string, string>? metadata, string key)
+        => metadata is not null && metadata.TryGetValue(key, out var value) ? value : null;
 
     private static async Task<Dictionary<string, (string Added, string Deleted)>> ReadGitNumStatAsync(
         string workspace,
@@ -507,4 +559,3 @@ internal sealed class SpinnerObserver : IAgentRunObserver, IDisposable
         };
     }
 }
-

@@ -526,12 +526,6 @@ public sealed partial class ReActAgentLoop : IAgentLoop
                 }
 
                 var result = turnResult.Result!;
-                await observer.OnEventAsync(new AgentRunEvent(
-                    AgentRunEventType.ToolExecutionCompleted,
-                    BuildToolCompletionMessage(tool.Name, decision.Arguments, result),
-                    step,
-                    tool.Name), ct);
-
                 pathHints.Capture(tool.Name, decision.Arguments, result);
                 trace.Add(turnResult.Step!);
                 toolStepsExecuted++;

@@ -1,5 +1,4 @@
 using System.Text;
-using System.Text.Json;
 
 namespace Agent.Core;
 
@@ -60,41 +59,6 @@ public sealed partial class ReActAgentLoop
         return string.IsNullOrWhiteSpace(normalizedReason)
             ? headline
             : $"{headline}. {normalizedReason}";
-    }
-
-    private static string BuildToolCompletionMessage(string toolName, JsonElement arguments, ToolResult result)
-    {
-        if (!result.Success)
-        {
-            var failReason = !string.IsNullOrWhiteSpace(result.StdErr) ? result.StdErr : result.Message;
-            return $"{toolName} failed: {ToOneLine(failReason, 180)}";
-        }
-
-        var path = ToolArgumentReader.GetString(arguments, "path");
-        var query = ToolArgumentReader.GetString(arguments, "query");
-        var command = ToolArgumentReader.GetString(arguments, "command");
-        var gitRef = ToolArgumentReader.GetString(arguments, "ref");
-        var queryText = string.IsNullOrWhiteSpace(query) ? "<query>" : ToOneLine(query, 80);
-        var commandText = string.IsNullOrWhiteSpace(command) ? "<command>" : ToOneLine(command, 140);
-
-        return toolName switch
-        {
-            "fs_list" => $"Listed {(path ?? ".")}",
-            "fs_read" => $"Read {path ?? "<missing path>"}",
-            "fs_write" => $"Wrote {path ?? "<missing path>"}",
-            "fs_patch" => $"Patched {path ?? "<missing path>"}",
-            "fs_delete" => $"Deleted {path ?? "<missing path>"}",
-            "search_lexical" => $"Searched \"{queryText}\"",
-            "search_semantic" => $"Searched semantically \"{queryText}\"",
-            "exec_shell" => $"Ran {commandText}",
-            "git_status" => "Ran git status --short --branch",
-            "git_diff" => "Ran git diff",
-            "git_log" => "Ran git log --oneline",
-            "git_show" => $"Ran git show --stat {gitRef ?? "HEAD"}",
-            "git_add" => $"Ran git add -- {ToolArgumentReader.GetString(arguments, "pathspec") ?? "."}",
-            "git_commit" => "Ran git commit -m <message>",
-            _ => $"{toolName} completed"
-        };
     }
 
     private static string ToOneLine(string? value, int maxLength)

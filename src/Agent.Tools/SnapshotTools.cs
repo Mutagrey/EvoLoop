@@ -1,6 +1,5 @@
 using System.Security.Cryptography;
 using System.Text;
-using System.Text.Json;
 using Agent.Core;
 
 namespace Agent.Tools;
@@ -31,7 +30,7 @@ public sealed class WorkspaceSnapshotDiffTool : ITool
 
     public async Task<ToolResult> ExecuteAsync(ToolCall call, ToolContext context, CancellationToken ct)
     {
-        var manifestPath = Path.Combine(context.WorkspaceRoot, ".evoloop", "storage", "snapshots", "last-mutation.json");
+        var manifestPath = MutationSnapshotManifestStore.GetManifestPath(context.WorkspaceRoot);
         if (!File.Exists(manifestPath))
         {
             return new ToolResult(false, "No snapshot manifest is available.");
@@ -40,7 +39,7 @@ public sealed class WorkspaceSnapshotDiffTool : ITool
         MutationSnapshotManifest? manifest;
         try
         {
-            manifest = JsonSerializer.Deserialize<MutationSnapshotManifest>(await File.ReadAllTextAsync(manifestPath, ct));
+            manifest = await MutationSnapshotManifestStore.ReadAsync(context.WorkspaceRoot, ct);
         }
         catch (Exception ex)
         {
@@ -119,10 +118,4 @@ public sealed class WorkspaceSnapshotDiffTool : ITool
         return value.Length <= 1200 ? value : value[..1200] + "\n[truncated]";
     }
 
-    private sealed record MutationSnapshotManifest(
-        string RelativePath,
-        bool ExistedBefore,
-        bool IsDirectory,
-        string SnapshotPath,
-        DateTimeOffset CapturedAtUtc);
 }
