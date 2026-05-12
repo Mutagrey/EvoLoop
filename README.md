@@ -57,7 +57,7 @@ Details:
 
 Packaged Windows usage:
 
-```powershell
+```cmd
 .\agent.cmd
 .\agent-cli.cmd doctor
 .\agent-cli.cmd run "inspect repository and summarize current issues"
@@ -139,9 +139,8 @@ scripts\prepare-github-windows-bundles.cmd
 
 This refreshes the committed bundles in:
 - `release/windows/win-x64/`
-- `release/windows/win-arm64/`
 
-`release/windows` remains committed for GitHub/offline distribution, but the current checked-in bundles are stale CLI-only artifacts. Refresh them before using the tracked folders as a TUI-capable release.
+`release/windows` remains committed for GitHub/offline distribution. EvoLoop ships a Windows x64 bundle only.
 
 ## Commands
 

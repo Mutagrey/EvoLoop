@@ -29,9 +29,8 @@ scripts\prepare-github-windows-bundles.cmd
 
 That refreshes:
 - `release\windows\win-x64\`
-- `release\windows\win-arm64\`
 
-`release\windows` remains a committed generated-artifact area for now so GitHub can carry ready-to-run offline bundles. The current checked-in files are stale CLI-only snapshots; run the prepare script before treating them as a TUI-capable release.
+`release\windows` remains a committed generated-artifact area for now so GitHub can carry a ready-to-run offline Windows x64 bundle.
 
 ## Target Machine Expectations
 
@@ -44,6 +43,7 @@ That refreshes:
 
 - `Agent.Tui.exe` with `agent.cmd`
 - `Agent.Cli.exe` with `agent-cli.cmd`
+- `install-user-command.cmd` for user-level PATH installation through `HKCU\Environment`
 - `config\corporate.offline.config.json` as a starting template
 - project-local docs that matter operationally:
   - `README.md`
@@ -52,10 +52,13 @@ That refreshes:
 
 ## First Run
 
-```powershell
+```cmd
 .\agent.cmd
 .\agent-cli.cmd doctor
+.\install-user-command.cmd
 ```
+
+`install-user-command.cmd` is plain `cmd`; it does not require PowerShell, `ExecutionPolicy Bypass`, admin rights, or a target-machine `.NET SDK`.
 
 Use `doctor` before task execution to confirm:
 - gateway reachability

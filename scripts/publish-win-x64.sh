@@ -3,6 +3,7 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 output_dir="$repo_root/artifacts/publish/win-x64"
+lock_dir="$repo_root/artifacts/publish-locks"
 local_dotnet="$repo_root/.tooling/dotnet8/dotnet"
 local_home="$repo_root/.tooling/home"
 local_nuget="$repo_root/.tooling/nuget"
@@ -14,7 +15,7 @@ export DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1
 export DOTNET_CLI_TELEMETRY_OPTOUT=1
 export DOTNET_NOLOGO=1
 
-mkdir -p "$local_home" "$local_nuget"
+mkdir -p "$local_home" "$local_nuget" "$lock_dir"
 
 dotnet_bin="dotnet"
 if [[ -x "$local_dotnet" ]]; then
@@ -25,6 +26,7 @@ fi
   -c Release \
   -r win-x64 \
   --self-contained true \
+  /p:NuGetLockFilePath="$lock_dir/Agent.Cli.win-x64.packages.lock.json" \
   /p:PublishSingleFile=true \
   /p:IncludeNativeLibrariesForSelfExtract=true \
   -o "$output_dir"
@@ -33,6 +35,7 @@ fi
   -c Release \
   -r win-x64 \
   --self-contained true \
+  /p:NuGetLockFilePath="$lock_dir/Agent.Tui.win-x64.packages.lock.json" \
   /p:PublishSingleFile=true \
   /p:IncludeNativeLibrariesForSelfExtract=true \
   -o "$output_dir"
@@ -94,3 +97,5 @@ setlocal
 "%~dp0Agent.Cli.exe" --workspace "%cd%" %*
 endlocal
 EOF
+
+cp "$repo_root/scripts/windows-bundle-install-user-command.cmd" "$output_dir/install-user-command.cmd"

@@ -7,17 +7,20 @@ set DOTNET_NOLOGO=1
 set SCRIPT_DIR=%~dp0
 set REPO_ROOT=%SCRIPT_DIR%..
 set OUTPUT_DIR=%REPO_ROOT%\artifacts\publish\win-x64
+set LOCK_DIR=%REPO_ROOT%\artifacts\publish-locks
 set DOTNET_CLI_HOME=%REPO_ROOT%\.tooling\home
 set NUGET_PACKAGES=%REPO_ROOT%\.tooling\nuget
 
 if not exist "%REPO_ROOT%\.tooling\home" mkdir "%REPO_ROOT%\.tooling\home" >nul 2>nul
 if not exist "%REPO_ROOT%\.tooling\nuget" mkdir "%REPO_ROOT%\.tooling\nuget" >nul 2>nul
+if not exist "%LOCK_DIR%" mkdir "%LOCK_DIR%" >nul 2>nul
 
 if exist "%REPO_ROOT%\.tooling\dotnet8\dotnet.exe" (
   "%REPO_ROOT%\.tooling\dotnet8\dotnet.exe" publish "%REPO_ROOT%\src\Agent.Cli\Agent.Cli.csproj" ^
     -c Release ^
     -r win-x64 ^
     --self-contained true ^
+    /p:NuGetLockFilePath="%LOCK_DIR%\Agent.Cli.win-x64.packages.lock.json" ^
     /p:PublishSingleFile=true ^
     /p:IncludeNativeLibrariesForSelfExtract=true ^
     -o "%OUTPUT_DIR%"
@@ -26,6 +29,7 @@ if exist "%REPO_ROOT%\.tooling\dotnet8\dotnet.exe" (
     -c Release ^
     -r win-x64 ^
     --self-contained true ^
+    /p:NuGetLockFilePath="%LOCK_DIR%\Agent.Tui.win-x64.packages.lock.json" ^
     /p:PublishSingleFile=true ^
     /p:IncludeNativeLibrariesForSelfExtract=true ^
     -o "%OUTPUT_DIR%"
@@ -34,6 +38,7 @@ if exist "%REPO_ROOT%\.tooling\dotnet8\dotnet.exe" (
     -c Release ^
     -r win-x64 ^
     --self-contained true ^
+    /p:NuGetLockFilePath="%LOCK_DIR%\Agent.Cli.win-x64.packages.lock.json" ^
     /p:PublishSingleFile=true ^
     /p:IncludeNativeLibrariesForSelfExtract=true ^
     -o "%OUTPUT_DIR%"
@@ -42,6 +47,7 @@ if exist "%REPO_ROOT%\.tooling\dotnet8\dotnet.exe" (
     -c Release ^
     -r win-x64 ^
     --self-contained true ^
+    /p:NuGetLockFilePath="%LOCK_DIR%\Agent.Tui.win-x64.packages.lock.json" ^
     /p:PublishSingleFile=true ^
     /p:IncludeNativeLibrariesForSelfExtract=true ^
     -o "%OUTPUT_DIR%"
@@ -112,5 +118,7 @@ exit /b 0
   echo "%%~dp0Agent.Cli.exe" --workspace "%%cd%%" %%*
   echo endlocal
 ) > "%~1\agent-cli.cmd"
+
+copy /Y "%REPO_ROOT%\scripts\windows-bundle-install-user-command.cmd" "%~1\install-user-command.cmd" >nul
 
 exit /b 0

@@ -81,13 +81,13 @@ Ordered refactor work follows `docs/architecture/refactor-plan.md`; this file re
 - Added an `ollama` model provider for local `/api/chat` with `think=false`, and verified `qwen3.5:9b` through a read-only `fs_read` agent flow.
 - Raised the default ReAct step budget to 120 because JSON-ReAct fallback normally executes one tool per model turn.
 - Stopped run scripts from overriding `HOME` so user-level config such as `~/.evoloop-agent/config.json` is visible when launching `agent`.
+- Removed `win-arm64` packaging support; Windows distribution is `win-x64` only.
 
 ## Current Problems
 
 - No packaged Windows smoke test has been executed yet against the new `win-x64` publish path.
 - The agent still depends on a remote/local model gateway for autonomous `run` and `plan` execution; `local-only degraded` mode is still diagnostic-safe, not a replacement for a local model runtime.
 - `dotnet run --project tests/Agent.Tests/Agent.Tests.csproj` can still hang in this macOS workspace while spawning MSBuild child nodes; build the solution first and run the compiled test DLL directly as documented in `docs/TESTING.md`.
-- The checked-in Windows release bundle binaries are stale CLI-only snapshots and have not been regenerated for the new `Agent.Tui` executable yet.
 - TUI approval uses a basic blocking dialog; review-specific diff navigation is not implemented yet.
 
 ## Next Improvements
@@ -95,5 +95,4 @@ Ordered refactor work follows `docs/architecture/refactor-plan.md`; this file re
 - Resolve the executable-project build hang in this macOS workspace and re-run the full test harness.
 - Smoke-test the self-contained Windows artifact on a restricted non-admin machine.
 - Exercise native tool calling against real corporate OpenAI-compatible gateways in all supported modes.
-- Regenerate or smoke-test the tracked Windows bundles before using `release/windows` as a TUI-capable release.
 - Add TUI review-specific diff navigation.

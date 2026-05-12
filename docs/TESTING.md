@@ -33,7 +33,7 @@ scripts\publish-win-x64.cmd
 
 Smoke test on target machine:
 
-```powershell
+```cmd
 .\agent.cmd
 .\agent-cli.cmd doctor
 .\agent-cli.cmd run "inspect repository and summarize current issues"
