@@ -9,7 +9,7 @@ EvoLoop is a Windows-first local coding agent split into these projects:
 - `Agent.Cli`: pure CLI entry point, single-turn commands, legacy REPL, console approval, and ANSI rendering.
 - `Agent.Tui`: separate Terminal.Gui executable with a minimal shell; it records input but does not run agent tasks yet.
 - `Agent.Hosting`: shared startup, workspace resolution, config/capability setup, and runtime wiring.
-- `Agent.Core`: contracts, config records, path safety, policy, ReAct loop, model adapter contracts, prompt/context builders, recovery logic, and tool-turn execution.
+- `Agent.Core`: focused contract/config files, path safety, policy, ReAct loop, model adapter contracts, prompt/context builders, recovery logic, and tool-turn execution.
 - `Agent.Tools`: file, patch, snapshot, git, search, and shell tools.
 - `Agent.Providers`: custom and OpenAI-compatible HTTP model clients, native tool-call parsing, streaming accumulation, and JSON fallback adaptation.
 - `Agent.Storage`: JSONL session/event stores, optional sqlite projection, workspace memory, and project identity.
@@ -57,7 +57,6 @@ Events and UI:
 ## Current Problems
 
 - `ReActAgentLoop` is the main hotspot. It owns step orchestration, model fallback switching, response validation, deterministic recovery, path hints, history compaction, memory save, event writes, and final/error handling.
-- `AgentContracts.cs` is too broad. It combines public contracts, config records, event/session records, tool request records, null implementations, and runtime enums.
 - `CliSession` mixes REPL command parsing, local degraded review fallback, runtime task dispatch, config formatting, command history, and undo.
 - `Agent.Core` is not pure runtime logic. It directly reads files, directories, environment variables, and starts capability probe processes.
 - Provider clients duplicate prompt fallback, response-format fallback, success-code checks, message shaping, and JSON-ReAct fallback wrapping.
@@ -65,11 +64,18 @@ Events and UI:
 - Snapshot manifest shape is duplicated in `WorkspacePatchService` and `WorkspaceSnapshotDiffTool`.
 - Small string/path helpers are duplicated: `CommandExists`, auth detection, `ToOneLine`, `NormalizePath`, and `Clip`.
 - `SpinnerObserver` infers activity by parsing user-facing tool result text, which couples UI summaries to exact tool messages.
-- TUI docs and release bundle state are stale in places: docs say wrappers target TUI, but tracked release bundles currently contain only older CLI artifacts.
+- TUI docs now point to one canonical source per topic, but tracked release bundles still contain older CLI-only artifacts.
 - `release/windows` contains large tracked binaries by design, but they are a high-churn area and currently out of sync with the TUI target.
 - Tests use one large custom harness file, which makes ownership harder as subsystems grow.
 
-No definitely removable production code was confirmed in this audit. The confirmed dead/stale areas are documentation/release-artifact drift, not unused runtime classes.
+No definitely removable production code was confirmed in this audit. The remaining confirmed stale area is release-artifact drift, not unused runtime classes.
+
+## Phase 1 Inventory Result
+
+- No tracked production `.cs` file was proven dead. SDK-style projects compile all tracked source files under each project, and tests reference both CLI and TUI projects.
+- No runtime code was removed in Phase 1.
+- `release/windows` remains committed by decision, but the checked-in bytes are stale CLI-only snapshots and must be regenerated before distribution.
+- TUI documentation ownership is explicit: `docs/TUI_SPEC.md` is the current behavior spec, `docs/TUI_USAGE.md` is usage, `docs/TUI_AUDIT.md` and `docs/TUI_DEPENDENCY_AUDIT.md` are audit records, and `docs/EvoLoop_TUI_SPEC.md` is historical planning input.
 
 ## Duplicated Or Dead Areas
 
@@ -117,9 +123,8 @@ No definitely removable production code was confirmed in this audit. The confirm
 
 1. Create architecture docs and decisions before code changes.
 2. Reconcile stale TUI/release documentation and decide how tracked Windows bundles are maintained.
-3. Split `AgentContracts.cs` into cohesive contract/config/event files without behavior changes.
-4. Move CLI local review/runtime glue into a shared application/hosting use case.
-5. Deduplicate provider fallback helpers in `ModelClientBase`.
-6. Centralize snapshot manifest and workspace path scan rules.
-7. Add structured activity/file/search/command event data so UI stops parsing result text.
-8. Connect TUI to runtime only after the observer and approval boundary is stable.
+3. Move CLI local review/runtime glue into a shared application/hosting use case.
+4. Deduplicate provider fallback helpers in `ModelClientBase`.
+5. Centralize snapshot manifest and workspace path scan rules.
+6. Add structured activity/file/search/command event data so UI stops parsing result text.
+7. Connect TUI to runtime only after the observer and approval boundary is stable.

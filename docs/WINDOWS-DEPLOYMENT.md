@@ -31,6 +31,8 @@ That refreshes:
 - `release\windows\win-x64\`
 - `release\windows\win-arm64\`
 
+`release\windows` remains a committed generated-artifact area for now so GitHub can carry ready-to-run offline bundles. The current checked-in files are stale CLI-only snapshots; run the prepare script before treating them as a TUI-capable release.
+
 ## Target Machine Expectations
 
 - no admin rights required

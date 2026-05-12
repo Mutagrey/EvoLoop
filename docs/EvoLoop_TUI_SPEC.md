@@ -1,5 +1,7 @@
 # EvoLoop TUI Specification for Codex App
 
+Historical planning input only. Current TUI behavior lives in [TUI_SPEC.md](TUI_SPEC.md), usage lives in [TUI_USAGE.md](TUI_USAGE.md), architecture boundaries live in [ARCHITECTURE.md](ARCHITECTURE.md), and progress lives in [STATUS.md](STATUS.md).
+
 ## Purpose
 
 This document is a ready-to-use specification for Codex App.

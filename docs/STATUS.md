@@ -46,6 +46,9 @@
 - Added testable TUI command and transcript rendering helpers covered by the lightweight test harness.
 - Added a TUI theme layer with `claude-dark` and `mono`; the default dark theme uses gray terminal colors with an amber/yellow workspace path.
 - Made user command installers repair existing EvoLoop profile blocks, add `agent-cli`, and keep `agent doctor/run/plan/review/repl` compatible with the CLI target.
+- Completed Phase 1 inventory without runtime changes: no production code was proven dead, duplicate implementations are recorded in the architecture audit, and TUI/release docs now identify one canonical source per topic.
+- Decided to keep `release/windows` committed for now as generated artifacts for offline/GitHub delivery.
+- Completed Phase 2 contract cleanup: split `AgentContracts.cs` into focused runtime, tool, model, storage/event, config, and null implementation files without public type or behavior changes.
 
 ## Current Problems
 
@@ -53,8 +56,7 @@
 - The agent still depends on a remote/local model gateway for autonomous `run` and `plan` execution; `local-only degraded` mode is still diagnostic-safe, not a replacement for a local model runtime.
 - `dotnet run --project tests/Agent.Tests/Agent.Tests.csproj` can still hang in this macOS workspace while spawning MSBuild child nodes; build the solution first and run the compiled test DLL directly as documented in `docs/TESTING.md`.
 - Snapshot diff output is currently optimized for the most recent mutation, not for a full multi-file workspace review baseline.
-- The committed Windows bundles remain intentionally tracked for now; this cleanup did not change the delivery model.
-- The checked-in Windows bundle binaries have not been regenerated for the new `Agent.Tui` executable yet.
+- The checked-in Windows release bundle binaries are stale CLI-only snapshots and have not been regenerated for the new `Agent.Tui` executable yet.
 - The TUI shell is not connected to agent execution yet; normal input records a pending-integration message.
 
 ## Next Improvements
@@ -64,5 +66,5 @@
 - Add richer review summarization for multi-file snapshot diffs and directory deletions.
 - Add tests for non-writable snapshot storage, undo failure recovery, and review-mode fallback behavior.
 - Exercise native tool calling against real corporate OpenAI-compatible gateways in all supported modes.
-- Remove leftover machine-specific clutter files from version control as part of a dedicated cleanup pass.
+- Regenerate or smoke-test the tracked Windows bundles before using `release/windows` as a TUI-capable release.
 - Connect `Agent.Tui` input to the existing agent runtime event flow after the minimal shell is stable.

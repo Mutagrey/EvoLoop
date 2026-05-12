@@ -1,5 +1,7 @@
 # TUI Audit
 
+This is an audit record, not the canonical current TUI spec. Current behavior lives in [TUI_SPEC.md](TUI_SPEC.md), usage lives in [TUI_USAGE.md](TUI_USAGE.md), and runtime boundaries live in [ARCHITECTURE.md](ARCHITECTURE.md).
+
 ## Current Shape
 
 - CLI entry point: `src/Agent.Cli/Program.cs`.

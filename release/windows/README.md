@@ -1,20 +1,23 @@
 # Windows Bundles
 
-This folder is intended to be committed to GitHub with ready-to-run Windows binaries.
-Run `scripts\prepare-github-windows-bundles.cmd` or `scripts/prepare-github-windows-bundles.sh` after target changes to refresh the checked-in binaries.
+This folder remains a committed generated-artifact area for GitHub-ready Windows binaries.
+
+Current checked-in state: stale CLI-only snapshots. They contain `Agent.Cli.exe` and a CLI `agent.cmd` wrapper, but not the current `Agent.Tui.exe` or `agent-cli.cmd` layout.
+
+Run `scripts\prepare-github-windows-bundles.cmd` or `scripts/prepare-github-windows-bundles.sh` after target changes and before distributing these folders.
 
 Available targets:
 - `win-x64`
 - `win-arm64`
 
-After refresh, each target folder contains:
+After refresh, each target folder should contain:
 - `Agent.Tui.exe`
 - `Agent.Cli.exe`
 - `agent.cmd`
 - `agent-cli.cmd`
 - `config.json.example`
 
-Usage from `cmd` or PowerShell inside the target folder:
+Expected usage after refresh from `cmd` or PowerShell inside the target folder:
 
 ```cmd
 agent.cmd

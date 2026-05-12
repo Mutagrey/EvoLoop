@@ -112,3 +112,18 @@ Decision:
 Reason:
 
 - `SpinnerObserver` currently derives activity by parsing text. TUI should consume structured events instead of depending on CLI renderer behavior.
+
+## ADR-0009: Keep Tracked Windows Bundles For Now
+
+Status: accepted
+
+Decision:
+
+- Keep `release/windows` as a committed generated-artifact area for GitHub/offline distribution.
+- Treat the current checked-in bundle bytes as stale CLI-only snapshots until the prepare scripts regenerate them.
+- Do not remove tracked Windows binaries during Phase 1 because the delivery model still values self-contained offline artifacts.
+
+Reason:
+
+- Target machines may lack admin rights, internet access, or a .NET SDK.
+- Removing committed bundles would change the delivery model rather than just inventorying dead code.

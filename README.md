@@ -26,9 +26,10 @@ Model tool calling:
 - OpenAI-compatible native non-streaming/streaming tools are available as opt-in profile modes
 
 Terminal behavior:
-- packaged `agent.cmd` starts the TUI target
-- `agent.cmd doctor/run/plan/review/repl` delegates to the CLI target for compatibility
-- packaged `agent-cli.cmd` starts the pure CLI target
+- freshly generated packages map `agent.cmd` to the TUI target
+- `agent.cmd doctor/run/plan/review/repl` delegates to the CLI target for compatibility in freshly generated packages
+- freshly generated packages include `agent-cli.cmd` for the pure CLI target
+- the currently checked-in `release/windows` bundles are legacy CLI-only snapshots until regenerated
 - ANSI-capable terminals use colored status output and live step spinner
 - plain Windows `cmd` falls back to plain ASCII output without ANSI escape noise
 
@@ -116,10 +117,15 @@ This refreshes the committed bundles in:
 - `release/windows/win-x64/`
 - `release/windows/win-arm64/`
 
+`release/windows` remains committed for GitHub/offline distribution, but the current checked-in bundles are stale CLI-only artifacts. Refresh them before using the tracked folders as a TUI-capable release.
+
 ## Commands
 
+TUI:
+- `agent.cmd` in freshly generated packages
+
 CLI:
-- `agent.cmd`
+- `agent.cmd doctor/run/plan/review/repl` in freshly generated packages
 - `agent-cli.cmd doctor`
 - `agent-cli.cmd run "<task>"`
 - `agent-cli.cmd plan "<task>"`

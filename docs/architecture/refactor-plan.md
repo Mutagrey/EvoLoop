@@ -5,26 +5,26 @@ This plan is ordered for small, low-risk cleanup batches. Do not start feature e
 ## Phase 1: Inventory And Dead Code Removal
 
 - [x] Create architecture audit docs.
-- [ ] Reconcile stale TUI/release documentation:
+- [x] Reconcile stale TUI/release documentation:
   - `docs/STATUS.md` says checked-in Windows bundles are not regenerated for `Agent.Tui`.
   - README/deployment docs describe `agent.cmd` as TUI wrapper.
   - `release/windows` currently tracks old CLI-only bundles.
-- [ ] Decide whether tracked Windows binaries remain committed or move to generated artifacts only.
-- [ ] Review large historical TUI docs (`docs/EvoLoop_TUI_SPEC.md`, `docs/TUI_SPEC.md`, `docs/TUI_AUDIT.md`) and keep one canonical explanation per topic.
-- [ ] Remove only code proven unused by references and tests; no confirmed production dead code was found in this audit.
+- [x] Decide whether tracked Windows binaries remain committed or move to generated artifacts only.
+- [x] Review large historical TUI docs (`docs/EvoLoop_TUI_SPEC.md`, `docs/TUI_SPEC.md`, `docs/TUI_AUDIT.md`) and keep one canonical explanation per topic.
+- [x] Remove only code proven unused by references and tests; no confirmed production dead code was found in this audit.
 
 ## Phase 2: Folder And Namespace Cleanup
 
-- [ ] Split `AgentContracts.cs` into cohesive files without behavior changes:
+- [x] Split `AgentContracts.cs` into cohesive files without behavior changes:
   - runtime contracts
   - tool contracts
   - model contracts
   - storage/event contracts
   - config records
   - null implementations
-- [ ] Keep public types/names stable during the split.
-- [ ] Consider folders inside existing projects before creating new assemblies.
-- [ ] Keep `Program.cs` thin in both CLI and TUI.
+- [x] Keep public types/names stable during the split.
+- [x] Consider folders inside existing projects before creating new assemblies.
+- [x] Keep `Program.cs` thin in both CLI and TUI.
 
 ## Phase 3: Agent Runtime Separation
 
@@ -92,12 +92,10 @@ This plan is ordered for small, low-risk cleanup batches. Do not start feature e
   - TUI command/transcript behavior
 - [ ] Use the documented build-then-run-DLL workaround if `dotnet run --project tests/Agent.Tests` hangs.
 
-## First Implementation Batch Recommendation
+## Completed Early Batches
 
-Start with a docs/status cleanup batch:
+- Docs/status cleanup aligned README, deployment docs, status, and release bundle notes around current TUI/release reality.
+- `release/windows` remains tracked as a generated-artifact area for now.
+- `AgentContracts.cs` was split mechanically into focused files and verified with a solution build.
 
-- Align README, deployment docs, and status around current TUI/release bundle reality.
-- Decide whether to regenerate or stop tracking stale `release/windows` binaries.
-- Do not touch runtime behavior in this batch.
-
-Then do a pure mechanical split of `AgentContracts.cs`, verified by the lightweight test harness.
+No runtime behavior changes were intended in these batches.

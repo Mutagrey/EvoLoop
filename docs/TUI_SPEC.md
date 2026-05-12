@@ -1,5 +1,7 @@
 # TUI Specification
 
+This is the canonical current TUI behavior spec. Usage details live in [TUI_USAGE.md](TUI_USAGE.md), architecture boundaries live in [ARCHITECTURE.md](ARCHITECTURE.md), and historical planning text in [EvoLoop_TUI_SPEC.md](EvoLoop_TUI_SPEC.md) is not a source of truth for current behavior.
+
 ## Summary
 
 The main interactive terminal surface is the separate `Agent.Tui` executable. Pure command-line operation stays in the separate `Agent.Cli` executable.
