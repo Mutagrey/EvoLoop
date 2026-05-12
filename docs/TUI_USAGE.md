@@ -35,12 +35,18 @@ Available themes:
 
 - `/help`: show available TUI commands.
 - `/status`: show the last task status.
+- `/model`: show active model, provider, gateway, auth, and tool-calling mode.
+- `/models`: list configured model profiles and fallback order.
+- `/skills`: list workspace skills from `.evoloop/skills/**/SKILL.md`.
 - `/config`: show grouped settings: connection, model profiles, safety, tool calling, limits, prompts, and storage.
 - `/config path`: show loaded and default config paths.
 - `/config open`: open the loaded config file with `$VISUAL`, `$EDITOR`, or Windows `notepad.exe`.
 - `/config reload`: reload config and rebuild the runtime host.
 - `/plan <task>`: run read-only plan mode.
 - `/review [focus]`: review current workspace changes.
+- `/diff`: show the current file from the latest review diff.
+- `/diff files`: list navigable files from the latest review diff.
+- `/diff next`, `/diff prev`, `/diff <number>`: navigate latest review diff files.
 - `/exit`: close the TUI.
 
 Normal text runs through the shared agent runtime in `run` mode. Model-backed `run` and `plan` still require a configured model gateway; `review` can use the local degraded fallback when model execution is unavailable.
@@ -58,4 +64,4 @@ dotnet run --project src/Agent.Tui --
 ## Known Limitations
 
 - Approval requests use a basic blocking approve/reject dialog; default `AutoEdit` skips prompts for writes and patches but still prompts for destructive actions.
-- No review diff navigation, session list, or slash suggestion popup yet.
+- No session list or slash suggestion popup yet.

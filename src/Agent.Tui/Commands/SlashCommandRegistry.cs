@@ -38,9 +38,21 @@ internal sealed class SlashCommandRegistry
                 "/help",
                 "Show available commands.",
                 "/help",
-                registry => new TuiCommandResult(true, false, false, registry.BuildHelpText()))
+                registry => new TuiCommandResult(true, false, false, registry.BuildHelpText())),
+            AppHandled("/config", "Show grouped runtime config.", "/config [path|open|reload]"),
+            AppHandled("/diff", "Navigate latest review diff.", "/diff [files|next|prev|number]"),
+            AppHandled("/model", "Show active model and gateway state.", "/model"),
+            AppHandled("/models", "List model profiles and fallback order.", "/models"),
+            AppHandled("/plan", "Run read-only plan mode.", "/plan <task>"),
+            AppHandled("/review", "Review current workspace changes.", "/review [focus]"),
+            AppHandled("/skills", "List workspace skills.", "/skills"),
+            AppHandled("/status", "Show last task status.", "/status"),
+            AppHandled("/task", "Run a normal task explicitly.", "/task <text>")
         });
     }
+
+    private static SlashCommand AppHandled(string name, string description, string usage)
+        => new(name, description, usage, _ => new TuiCommandResult(false, false, false, "Handled by TUI."));
 
     public IReadOnlyList<SlashCommand> Filter(string prefix)
     {
@@ -87,7 +99,8 @@ internal sealed class SlashCommandRegistry
 
         sb.AppendLine();
         sb.AppendLine("Task input runs through the shared agent runtime.");
-        sb.AppendLine("Use /config, /status, /plan <task>, /review [focus], or plain text for run mode.");
+        sb.AppendLine("Use /model, /models, /skills, /config, /status, /plan <task>, /review [focus], /diff, or plain text for run mode.");
+        sb.AppendLine("After /review, use /diff files, /diff next, /diff prev, or /diff <number>.");
         return sb.ToString().TrimEnd();
     }
 }

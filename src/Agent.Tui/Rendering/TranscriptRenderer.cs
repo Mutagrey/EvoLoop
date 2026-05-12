@@ -21,46 +21,41 @@ internal static class TranscriptRenderer
     {
         var width = Math.Clamp(maxWidth, 40, 240);
         var lines = new List<TranscriptRenderLine>();
-        var previousRole = (TuiMessageRole?)null;
 
         foreach (var message in messages)
         {
-            var major = message.Role is not TuiMessageRole.Status;
-            if (lines.Count > 0 && major && previousRole != message.Role)
+            if (lines.Count > 0 && message.Role is TuiMessageRole.User or TuiMessageRole.Assistant)
             {
                 lines.Add(TranscriptRenderLine.Spacer);
             }
 
             var time = message.CreatedAtUtc.ToLocalTime().ToString("HH:mm");
             var important = IsImportant(message);
-            var label = GetLabel(message.Role);
-
-            if (message.Role == TuiMessageRole.Status)
-            {
-                AppendWrapped(lines, message.Role, $"[{time}] {label}  ", message.Content, width, important);
-            }
-            else
-            {
-                lines.Add(new TranscriptRenderLine(message.Role, $"[{time}] {label}", true, important));
-                AppendWrapped(lines, message.Role, "  ", message.Content, width, important);
-            }
-
-            previousRole = message.Role;
+            var prefix = BuildPrefix(time, message.Role);
+            var continuation = BuildContinuation(time, message.Role);
+            AppendWrapped(lines, message.Role, prefix, continuation, message.Content, width, important);
         }
 
         return lines;
     }
 
-    private static string GetLabel(TuiMessageRole role)
+    private static string BuildPrefix(string time, TuiMessageRole role)
     {
-        return role switch
+        var marker = role switch
         {
-            TuiMessageRole.User => "user",
-            TuiMessageRole.Assistant => "assistant",
-            TuiMessageRole.Error => "error",
-            TuiMessageRole.Status => "status",
-            _ => "system"
+            TuiMessageRole.User => "> ",
+            TuiMessageRole.Assistant => "< ",
+            TuiMessageRole.Error => "! ",
+            TuiMessageRole.Status => "|- ",
+            _ => "* "
         };
+        return $"{time} {marker}";
+    }
+
+    private static string BuildContinuation(string time, TuiMessageRole role)
+    {
+        var marker = role == TuiMessageRole.Status ? "|  " : "  | ";
+        return new string(' ', time.Length + 1) + marker;
     }
 
     private static bool IsImportant(TuiMessage message)
@@ -86,12 +81,12 @@ internal static class TranscriptRenderer
         List<TranscriptRenderLine> lines,
         TuiMessageRole role,
         string prefix,
+        string continuation,
         string content,
         int maxWidth,
         bool important)
     {
         var lineWidth = Math.Max(16, maxWidth - prefix.Length);
-        var continuation = new string(' ', prefix.Length);
         var paragraphs = content.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n');
 
         for (var p = 0; p < paragraphs.Length; p++)

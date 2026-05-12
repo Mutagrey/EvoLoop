@@ -67,11 +67,15 @@ public sealed class AgentTaskRunner
         {
             var status = await ProcessRunner.RunAsync("git", new[] { "status", "--short", "--branch" }, _context.Workspace, ct, 32 * 1024);
             var diff = await ProcessRunner.RunAsync("git", new[] { "diff", "--stat" }, _context.Workspace, ct, 32 * 1024);
+            var fullDiff = await ProcessRunner.RunAsync("git", new[] { "diff", "--no-ext-diff" }, _context.Workspace, ct, 128 * 1024);
             summary.AppendLine("git status:");
             summary.AppendLine(string.IsNullOrWhiteSpace(status.StdOut) ? "<empty>" : status.StdOut.Trim());
             summary.AppendLine();
             summary.AppendLine("git diff --stat:");
             summary.AppendLine(string.IsNullOrWhiteSpace(diff.StdOut) ? "<empty>" : diff.StdOut.Trim());
+            summary.AppendLine();
+            summary.AppendLine("git diff:");
+            summary.AppendLine(string.IsNullOrWhiteSpace(fullDiff.StdOut) ? "<empty>" : fullDiff.StdOut.Trim());
         }
         else
         {

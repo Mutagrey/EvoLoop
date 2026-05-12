@@ -15,7 +15,9 @@ internal static class TuiTests
         ("TUI app dispatches plain input as run", TestTuiAppDispatchesPlainInputAsRun),
         ("TUI app dispatches plan command as read-only plan", TestTuiAppDispatchesPlanCommand),
         ("TUI app dispatches review command as read-only review", TestTuiAppDispatchesReviewCommand),
+        ("TUI app navigates review diffs", TestTuiAppNavigatesReviewDiffs),
         ("TUI app reports unknown slash command", TestTuiUnknownSlashCommand),
+        ("TUI app shows model and skills commands", TestTuiModelAndSkillsCommands),
         ("TUI config command renders grouped settings", TestTuiConfigCommandRendersGroupedSettings),
         ("TUI config path command shows config paths", TestTuiConfigPathCommandShowsConfigPaths),
         ("TUI config open command uses attached opener", TestTuiConfigOpenCommandUsesAttachedOpener),
@@ -126,6 +128,48 @@ static async Task TestTuiAppDispatchesReviewCommand()
     Assert(runner.Calls[0].ApprovalMode == ApprovalPolicyMode.ReadOnly, "Expected read-only approval mode.");
 }
 
+static async Task TestTuiAppNavigatesReviewDiffs()
+{
+    var runner = new CapturingTuiTaskRunner
+    {
+        Result = new AgentTaskRunResult(
+            new AgentRunResult(true, "reviewed", 0, "review-session", Array.Empty<SessionStep>()),
+            """
+Snapshot workspace diff produced.
+path: notes.txt
+change_state: modified
+snapshot_excerpt:
+old
+current_excerpt:
+new
+---
+path: src/App.cs
+change_state: created
+snapshot_excerpt:
+<empty>
+current_excerpt:
+class App { }
+""")
+    };
+    var app = CreateTestTuiApp();
+    app.AttachTaskRunner(runner);
+
+    await app.SubmitAsync("/review", CancellationToken.None);
+
+    Assert(app.Messages.Any(m => m.Content.Contains("Review diff ready: 2 files", StringComparison.Ordinal)), "Expected review diff ready status.");
+
+    var files = app.Submit("/diff files");
+    Assert(files.Handled, "Expected /diff files to be handled.");
+    Assert(files.Message.Contains("notes.txt", StringComparison.Ordinal), "Expected diff file list.");
+    Assert(files.Message.Contains("src/App.cs", StringComparison.Ordinal), "Expected second diff file.");
+
+    var next = app.Submit("/diff next");
+    Assert(next.Message.Contains("Diff 2/2: src/App.cs", StringComparison.Ordinal), "Expected /diff next to select second file.");
+
+    var first = app.Submit("/diff 1");
+    Assert(first.Message.Contains("Diff 1/2: notes.txt", StringComparison.Ordinal), "Expected /diff 1 to select first file.");
+}
+
 static Task TestTuiUnknownSlashCommand()
 {
     var app = CreateTestTuiApp();
@@ -135,6 +179,27 @@ static Task TestTuiUnknownSlashCommand()
     Assert(result.IsError, "Expected unknown command to return an error.");
     Assert(app.Messages.Last().Role == TuiMessageRole.Error, "Expected unknown command to append an error message.");
     Assert(app.Messages.Last().Content.Contains("Unknown command", StringComparison.Ordinal), "Expected unknown command details.");
+    return Task.CompletedTask;
+}
+
+static Task TestTuiModelAndSkillsCommands()
+{
+    var app = CreateTestTuiApp();
+
+    var model = app.Submit("/model");
+    Assert(model.Handled, "Expected /model to be handled.");
+    Assert(model.Message.Contains("Model", StringComparison.Ordinal), "Expected model heading.");
+    Assert(model.Message.Contains("active profile: reasoning", StringComparison.Ordinal), "Expected active model profile.");
+
+    var models = app.Submit("/models");
+    Assert(models.Handled, "Expected /models to be handled.");
+    Assert(models.Message.Contains("Model profiles", StringComparison.Ordinal), "Expected model profiles heading.");
+    Assert(models.Message.Contains("reasoning (active)", StringComparison.Ordinal), "Expected active profile marker.");
+
+    var skills = app.Submit("/skills");
+    Assert(skills.Handled, "Expected /skills to be handled.");
+    Assert(skills.Message.Contains("Skills", StringComparison.Ordinal), "Expected skills heading.");
+    Assert(skills.Message.Contains("No workspace skills", StringComparison.Ordinal), "Expected empty skills message.");
     return Task.CompletedTask;
 }
 
@@ -148,6 +213,7 @@ static Task TestTuiConfigCommandRendersGroupedSettings()
     Assert(app.Messages.Last().Content.Contains("Model Profiles", StringComparison.Ordinal), "Expected model profile section.");
     Assert(app.Messages.Last().Content.Contains("Tool Calling", StringComparison.Ordinal), "Expected tool-calling section.");
     Assert(app.Messages.Last().Content.Contains("Limits / Advanced", StringComparison.Ordinal), "Expected advanced limits section.");
+    Assert(app.Messages.Last().Content.Contains("|-", StringComparison.Ordinal), "Expected tree-style config rendering.");
     return Task.CompletedTask;
 }
 
@@ -364,13 +430,14 @@ static Task TestTuiTranscriptRenderer()
     var rendered = TranscriptRenderer.Render(new[]
     {
         TuiMessage.User("hello"),
+        TuiMessage.Status("runtime event"),
         TuiMessage.System("runtime event")
     }, 60);
 
-    Assert(rendered.Contains("user", StringComparison.Ordinal), "Expected user role label.");
-    Assert(rendered.Contains("  hello", StringComparison.Ordinal), "Expected user message content.");
-    Assert(rendered.Contains("system", StringComparison.Ordinal), "Expected system role label.");
-    Assert(rendered.Contains("  runtime event", StringComparison.Ordinal), "Expected system message content.");
+    Assert(rendered.Contains("> hello", StringComparison.Ordinal), "Expected user message on the first line.");
+    Assert(rendered.Contains("|- runtime event", StringComparison.Ordinal), "Expected status message to render as a tree item.");
+    Assert(rendered.Contains("* runtime event", StringComparison.Ordinal), "Expected system message marker.");
+    Assert(!rendered.Contains("status", StringComparison.OrdinalIgnoreCase), "Expected status role label to stay hidden.");
     Assert(rendered.Contains(':', StringComparison.Ordinal), "Expected timestamp in transcript.");
     return Task.CompletedTask;
 }
@@ -487,6 +554,9 @@ static TuiApp CreateTestTuiApp()
 internal sealed class CapturingTuiTaskRunner : ITuiTaskRunner
 {
     public List<TuiTaskRunnerCall> Calls { get; } = new();
+    public AgentTaskRunResult Result { get; set; } = new(
+        new AgentRunResult(true, "done", 0, "test-session", Array.Empty<SessionStep>()),
+        null);
 
     public Task<AgentTaskRunResult> RunAsync(
         string task,
@@ -497,9 +567,7 @@ internal sealed class CapturingTuiTaskRunner : ITuiTaskRunner
         CancellationToken ct)
     {
         Calls.Add(new TuiTaskRunnerCall(task, profile, executionMode, approvalMode));
-        return Task.FromResult(new AgentTaskRunResult(
-            new AgentRunResult(true, "done", 0, "test-session", Array.Empty<SessionStep>()),
-            null));
+        return Task.FromResult(Result);
     }
 }
 

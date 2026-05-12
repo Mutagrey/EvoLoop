@@ -17,7 +17,7 @@ Implemented:
 - add packaged `agent-cli.cmd` as the pure CLI wrapper
 - keep the old line REPL in `Agent.Cli`
 - vendor the TUI dependency packages for offline restore
-- Terminal.Gui shell with transcript, input line, status bar, `/help`, `/status`, `/plan`, `/review`, and `/exit`
+- Terminal.Gui shell with transcript, input line, status bar, `/help`, `/status`, `/model`, `/models`, `/skills`, `/plan`, `/review`, `/diff`, and `/exit`
 - theme layer with `claude-dark` and `mono`
 - TUI-local runtime observer and approval adapter connected to the shared `Agent.Hosting` runtime path
 - basic Terminal.Gui approve/reject dialog for runtime approval requests
@@ -26,6 +26,9 @@ Implemented:
 - structured tool activity rendering for read, edit, search, command, explore, and failed tool completions
 - grouped transcript rendering with timestamps and role-specific colors
 - status-bar thinking/working spinner while a task is active
+- review diff navigation through `/diff`, `/diff files`, `/diff next`, `/diff prev`, and `/diff <number>`
+- model/profile inspection through `/model` and `/models`
+- workspace skill index inspection through `/skills`
 
 Normal text runs through the shared agent runtime in `run` mode. `/plan <task>` runs in read-only plan mode. `/review [focus]` runs review mode and can use the local degraded review fallback when model execution is unavailable.
 
@@ -64,8 +67,12 @@ The minimal shell supports:
 - status bar with active task spinner
 - `/help`
 - `/status`
+- `/model`
+- `/models`
+- `/skills`
 - `/plan <task>`
 - `/review [focus]`
+- `/diff`, `/diff files`, `/diff next`, `/diff prev`, `/diff <number>`
 - `/exit`
 - `Ctrl+C` shutdown
 - `Ctrl+D` shutdown when input is empty
@@ -76,4 +83,22 @@ Default styling is a dark terminal palette: black background, gray text, muted c
 
 ## Next Implementation Phase
 
-Add review-specific diff navigation without changing Core, Tools, Providers, or Storage ownership.
+Add slash suggestion popup without changing Core, Tools, Providers, or Storage ownership.
+
+## Command Roadmap
+
+Implemented command surfaces:
+
+- `/model`, `/models`: active model, profile list, fallback order, gateway state.
+- `/skills`: workspace skill index.
+- `/config`: structured runtime config and config file actions.
+- `/review`, `/diff`: review execution and latest diff navigation.
+
+Next candidates:
+
+- `/clear`: clear visible transcript only.
+- `/sessions`: list recent session summaries from JSONL/session storage.
+- `/memory`: inspect loaded workspace memory summaries.
+- `/theme`: switch between `claude-dark` and `mono` at runtime.
+- `/tools`: list available tools and policy modes.
+- `/doctor`: show capability probe output inside TUI.

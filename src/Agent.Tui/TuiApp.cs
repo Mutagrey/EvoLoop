@@ -11,6 +11,7 @@ internal sealed class TuiApp
     private ITuiTaskRunner? _taskRunner;
     private AgentRunResult? _lastRun;
     private AgentRunResult? _lastPlan;
+    private ReviewDiffNavigator? _lastReviewDiff;
     private bool _taskRunning;
     private bool _modelThinking;
     private Func<ApprovalRequest, CancellationToken, Task<bool>>? _approvalPrompt;
@@ -141,6 +142,32 @@ internal sealed class TuiApp
             return new TuiCommandResult(true, false, false, message);
         }
 
+        if (TryHandleDiffCommand(text, out var diffResult))
+        {
+            return diffResult;
+        }
+
+        if (text.Equals("/model", StringComparison.OrdinalIgnoreCase))
+        {
+            var message = FormatModel();
+            AddMessage(TuiMessage.System(message));
+            return new TuiCommandResult(true, false, false, message);
+        }
+
+        if (text.Equals("/models", StringComparison.OrdinalIgnoreCase))
+        {
+            var message = FormatModels();
+            AddMessage(TuiMessage.System(message));
+            return new TuiCommandResult(true, false, false, message);
+        }
+
+        if (text.Equals("/skills", StringComparison.OrdinalIgnoreCase))
+        {
+            var message = TuiSkillsFormatter.Format(Runtime.Workspace);
+            AddMessage(TuiMessage.System(message));
+            return new TuiCommandResult(true, false, false, message);
+        }
+
         if (text.Equals("/config", StringComparison.OrdinalIgnoreCase))
         {
             var message = TuiConfigFormatter.Format(Runtime);
@@ -236,7 +263,7 @@ internal sealed class TuiApp
 
     private void AddStartupMessages()
     {
-        AddMessage(TuiMessage.System("TUI shell ready. Type a task, /plan <task>, /review [focus], /config, /status, /help, or /exit."));
+        AddMessage(TuiMessage.System("TUI shell ready. Type a task, /plan <task>, /review [focus], /diff, /model, /skills, /config, /status, /help, or /exit."));
         AddStatus($"Workspace: {Runtime.Workspace}");
         AddStatus($"Model profile: {Runtime.Profile}; model: {Runtime.ModelId}; runtime mode: {Runtime.ModeLabel}");
 
@@ -366,6 +393,11 @@ internal sealed class TuiApp
 
             var body = outcome.LocalReviewSummary ?? $"Session: {result.SessionId}\nSteps: {result.Steps}\n\n{result.FinalMessage}";
             AddMessage(result.Success ? TuiMessage.Assistant(body) : TuiMessage.Error(body));
+            if (executionMode == AgentExecutionMode.Review)
+            {
+                StoreReviewDiff(outcome.LocalReviewSummary ?? result.FinalMessage);
+            }
+
             return new TuiCommandResult(true, false, !result.Success, result.FinalMessage);
         }
         finally
@@ -416,5 +448,117 @@ internal sealed class TuiApp
         }
 
         return false;
+    }
+
+    private bool TryHandleDiffCommand(string text, out TuiCommandResult result)
+    {
+        result = new TuiCommandResult(false, false, false, string.Empty);
+        if (!text.Equals("/diff", StringComparison.OrdinalIgnoreCase) &&
+            !text.StartsWith("/diff ", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var args = text.Length > 5 ? text[5..].Trim() : string.Empty;
+        var navigator = _lastReviewDiff;
+        if (navigator is null || !navigator.HasFiles)
+        {
+            const string message = "No review diff is available yet. Run /review first.";
+            AddMessage(TuiMessage.Status(message));
+            result = new TuiCommandResult(true, false, false, message);
+            return true;
+        }
+
+        string rendered;
+        var isError = false;
+        if (string.IsNullOrWhiteSpace(args))
+        {
+            rendered = navigator.RenderCurrent();
+        }
+        else if (args.Equals("files", StringComparison.OrdinalIgnoreCase))
+        {
+            rendered = navigator.RenderFiles();
+        }
+        else if (args.Equals("next", StringComparison.OrdinalIgnoreCase))
+        {
+            rendered = navigator.Next();
+        }
+        else if (args.Equals("prev", StringComparison.OrdinalIgnoreCase) ||
+                 args.Equals("previous", StringComparison.OrdinalIgnoreCase))
+        {
+            rendered = navigator.Previous();
+        }
+        else if (int.TryParse(args, out var index))
+        {
+            isError = !navigator.TrySelect(index, out rendered);
+        }
+        else
+        {
+            rendered = "Usage: /diff, /diff files, /diff next, /diff prev, or /diff <number>.";
+            isError = true;
+        }
+
+        AddMessage(isError ? TuiMessage.Error(rendered) : TuiMessage.System(rendered));
+        result = new TuiCommandResult(true, false, isError, rendered);
+        return true;
+    }
+
+    private void StoreReviewDiff(string? reviewSummary)
+    {
+        _lastReviewDiff = ReviewDiffNavigator.FromReviewSummary(reviewSummary);
+        if (!_lastReviewDiff.HasFiles)
+        {
+            AddStatus("No navigable diff was found in the review output.");
+            return;
+        }
+
+        AddStatus($"Review diff ready: {_lastReviewDiff.Count} files. Use /diff, /diff files, /diff next, /diff prev, or /diff <number>.");
+    }
+
+    private string FormatModel()
+    {
+        return string.Join(Environment.NewLine, new[]
+        {
+            "Model",
+            $"|- active profile: {Runtime.Profile}",
+            $"|- provider: {Runtime.ModelProvider}",
+            $"|- model: {Runtime.ModelId}",
+            $"|- tool calling: {Runtime.ToolCallingMode}",
+            $"|- runtime mode: {Runtime.ModeLabel}",
+            $"|- gateway: {(Runtime.ModelReachable ? "reachable" : "unreachable")}",
+            $"|- auth: {(Runtime.ApiAuthConfigured ? "present" : "missing")}",
+            $"`- status: {Runtime.ModelStatus}"
+        });
+    }
+
+    private string FormatModels()
+    {
+        IReadOnlyList<string> profiles = Runtime.ModelProfiles.Count == 0
+            ? new[] { Runtime.Profile }
+            : Runtime.ModelProfiles;
+        var lines = new List<string> { "Model profiles" };
+        for (var i = 0; i < profiles.Count; i++)
+        {
+            var marker = i == profiles.Count - 1 ? "`-" : "|-";
+            var active = profiles[i].Equals(Runtime.Profile, StringComparison.OrdinalIgnoreCase) ? " (active)" : string.Empty;
+            lines.Add($"{marker} {profiles[i]}{active}");
+        }
+
+        lines.Add(string.Empty);
+        lines.Add("Fallback order");
+        if (Runtime.ProfileFallbackOrder.Count == 0)
+        {
+            lines.Add("`- <none>");
+        }
+        else
+        {
+            for (var i = 0; i < Runtime.ProfileFallbackOrder.Count; i++)
+            {
+                var marker = i == Runtime.ProfileFallbackOrder.Count - 1 ? "`-" : "|-";
+                lines.Add($"{marker} {Runtime.ProfileFallbackOrder[i]}");
+            }
+        }
+
+        return string.Join(Environment.NewLine, lines);
     }
 }
