@@ -1,5 +1,7 @@
 # Status
 
+Ordered refactor work follows `docs/architecture/refactor-plan.md`; this file records completed work, current problems, and non-ordered next improvements.
+
 ## Completed
 
 - Centralized the target framework and common compiler settings in `Directory.Build.props`.
