@@ -8,7 +8,7 @@ internal sealed class TuiApp
     private readonly object _sync = new();
     private readonly List<TuiMessage> _messages = new();
     private string _activity = "idle";
-    private AgentTaskRunner? _taskRunner;
+    private ITuiTaskRunner? _taskRunner;
     private AgentRunResult? _lastRun;
     private AgentRunResult? _lastPlan;
     private bool _taskRunning;
@@ -58,7 +58,7 @@ internal sealed class TuiApp
         }
     }
 
-    public void AttachTaskRunner(AgentTaskRunner taskRunner)
+    public void AttachTaskRunner(ITuiTaskRunner taskRunner)
     {
         _taskRunner = taskRunner;
     }

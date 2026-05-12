@@ -91,7 +91,7 @@ This plan is ordered for small, low-risk cleanup batches. Do not start feature e
   - native non-streaming and streaming tool calls
   - config loading and degraded mode
   - provider formatting/fallback behavior
-  - TUI command/transcript behavior
+  - [x] TUI command/transcript behavior
 - [ ] Use the documented build-then-run-DLL workaround if `dotnet run --project tests/Agent.Tests` hangs.
 
 ## Completed Early Batches

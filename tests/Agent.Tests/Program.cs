@@ -4,6 +4,7 @@ using System.Reflection;
 using System.Runtime.Loader;
 using Agent.Cli;
 using Agent.Core;
+using Agent.Hosting;
 using Agent.Providers;
 using Agent.Storage;
 using Agent.Tools;
@@ -18,6 +19,9 @@ var tests = new List<(string Name, Func<Task> Run)>
     ("TUI parser accepts theme options", TestTuiParserThemeOptions),
     ("TUI theme resolves default and no-color variants", TestTuiThemeResolution),
     ("TUI app rejects task when runtime is not attached", TestTuiAppRejectsTaskWithoutRuntime),
+    ("TUI app dispatches plain input as run", TestTuiAppDispatchesPlainInputAsRun),
+    ("TUI app dispatches plan command as read-only plan", TestTuiAppDispatchesPlanCommand),
+    ("TUI app dispatches review command as read-only review", TestTuiAppDispatchesReviewCommand),
     ("TUI app reports unknown slash command", TestTuiUnknownSlashCommand),
     ("TUI runtime observer records agent events", TestTuiRuntimeObserverRecordsEvents),
     ("TUI approval service records default rejection", TestTuiApprovalServiceRecordsDefaultRejection),
@@ -177,6 +181,52 @@ static Task TestTuiAppRejectsTaskWithoutRuntime()
     Assert(app.Messages.Any(m => m.Role == TuiMessageRole.User && m.Content == "inspect project"), "Expected user message in transcript.");
     Assert(app.Messages.Any(m => m.Content.Contains("runtime is not attached", StringComparison.Ordinal)), "Expected missing runtime notice.");
     return Task.CompletedTask;
+}
+
+static async Task TestTuiAppDispatchesPlainInputAsRun()
+{
+    var runner = new CapturingTuiTaskRunner();
+    var app = CreateTestTuiApp();
+    app.AttachTaskRunner(runner);
+
+    var result = await app.SubmitAsync("inspect project", CancellationToken.None);
+
+    Assert(result.Handled, "Expected plain input to run through attached runtime.");
+    Assert(runner.Calls.Count == 1, "Expected one runtime call.");
+    Assert(runner.Calls[0].Task == "inspect project", "Expected task text to be passed through.");
+    Assert(runner.Calls[0].ExecutionMode == AgentExecutionMode.Run, "Expected run mode.");
+    Assert(runner.Calls[0].ApprovalMode == ApprovalPolicyMode.WorkspaceWrite, "Expected configured default approval mode.");
+}
+
+static async Task TestTuiAppDispatchesPlanCommand()
+{
+    var runner = new CapturingTuiTaskRunner();
+    var app = CreateTestTuiApp();
+    app.AttachTaskRunner(runner);
+
+    var result = await app.SubmitAsync("/plan inspect architecture", CancellationToken.None);
+
+    Assert(result.Handled, "Expected /plan to run through attached runtime.");
+    Assert(runner.Calls.Count == 1, "Expected one runtime call.");
+    Assert(runner.Calls[0].Task == "inspect architecture", "Expected plan task text without command prefix.");
+    Assert(runner.Calls[0].ExecutionMode == AgentExecutionMode.Plan, "Expected plan mode.");
+    Assert(runner.Calls[0].ApprovalMode == ApprovalPolicyMode.ReadOnly, "Expected read-only approval mode.");
+}
+
+static async Task TestTuiAppDispatchesReviewCommand()
+{
+    var runner = new CapturingTuiTaskRunner();
+    var app = CreateTestTuiApp();
+    app.AttachTaskRunner(runner);
+
+    var result = await app.SubmitAsync("/review safety", CancellationToken.None);
+
+    Assert(result.Handled, "Expected /review to run through attached runtime.");
+    Assert(runner.Calls.Count == 1, "Expected one runtime call.");
+    Assert(runner.Calls[0].Task.Contains("Review current workspace changes", StringComparison.Ordinal), "Expected canonical review task.");
+    Assert(runner.Calls[0].Task.Contains("Focus: safety", StringComparison.Ordinal), "Expected review focus.");
+    Assert(runner.Calls[0].ExecutionMode == AgentExecutionMode.Review, "Expected review mode.");
+    Assert(runner.Calls[0].ApprovalMode == ApprovalPolicyMode.ReadOnly, "Expected read-only approval mode.");
 }
 
 static Task TestTuiUnknownSlashCommand()
@@ -1750,3 +1800,28 @@ static void Assert(bool condition, string message)
         throw new InvalidOperationException(message);
     }
 }
+
+internal sealed class CapturingTuiTaskRunner : ITuiTaskRunner
+{
+    public List<TuiTaskRunnerCall> Calls { get; } = new();
+
+    public Task<AgentTaskRunResult> RunAsync(
+        string task,
+        string profile,
+        AgentExecutionMode executionMode,
+        ApprovalPolicyMode approvalMode,
+        IAgentRunObserver? observer,
+        CancellationToken ct)
+    {
+        Calls.Add(new TuiTaskRunnerCall(task, profile, executionMode, approvalMode));
+        return Task.FromResult(new AgentTaskRunResult(
+            new AgentRunResult(true, "done", 0, "test-session", Array.Empty<SessionStep>()),
+            null));
+    }
+}
+
+internal sealed record TuiTaskRunnerCall(
+    string Task,
+    string Profile,
+    AgentExecutionMode ExecutionMode,
+    ApprovalPolicyMode ApprovalMode);

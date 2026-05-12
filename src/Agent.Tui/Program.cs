@@ -20,7 +20,7 @@ public static class Program
                 TuiRuntimeInfo.From(context, command, theme.Name),
                 SlashCommandRegistry.CreateDefault());
             using var host = AgentExecutionHost.Create(context, new TuiApprovalService(app));
-            app.AttachTaskRunner(new AgentTaskRunner(host, context));
+            app.AttachTaskRunner(new TuiTaskRunner(new AgentTaskRunner(host, context)));
             new TerminalGuiTuiHost(theme).Run(app);
             return 0;
         }

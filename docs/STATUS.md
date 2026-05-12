@@ -64,6 +64,7 @@ Ordered refactor work follows `docs/architecture/refactor-plan.md`; this file re
 - Started Phase 8 UI/TUI boundary cleanup by moving local degraded review fallback into `Agent.Hosting` while keeping rendering in CLI/TUI-specific layers.
 - Completed Phase 8 UI/TUI boundary cleanup by adding TUI-local runtime observer and approval adapters without making `Agent.Tui` depend on `Agent.Cli` or moving Terminal.Gui types outside TUI.
 - Connected `Agent.Tui` input to `AgentTaskRunner`: plain text runs `run`, `/plan <task>` runs read-only plan mode, and `/review [focus]` runs review mode through the shared hosting/runtime path.
+- Started Phase 9 safety/test cleanup with focused TUI dispatch tests for plain input, `/plan <task>`, and `/review [focus]`.
 
 ## Current Problems
 
