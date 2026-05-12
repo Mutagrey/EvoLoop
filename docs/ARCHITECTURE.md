@@ -21,7 +21,7 @@ EvoLoop is a model-backed coding agent CLI with explicit fallback behavior for r
 - `Agent.Tools`
   File, git, shell, search, snapshot diff, and undo tools. Tools expose metadata such as risk, category, mutation behavior, and required capabilities.
 - `Agent.Providers`
-  Model gateway access and provider-specific request/response adaptation only. No policy or workspace logic belongs here.
+  Model gateway access and provider-specific request/response adaptation only, including custom gateways, OpenAI-compatible chat completions, and Ollama `/api/chat`. No policy or workspace logic belongs here.
 - `Agent.Storage`
   Session and memory persistence. JSONL is the canonical event log; optional SQLite is only a projection/cache when available.
 
@@ -105,6 +105,8 @@ Profiles default to `JsonReActFallback` for compatibility with restricted corpor
 Native tool support is never assumed. Provider-specific payloads and parsing stay in `Agent.Providers`; the runtime only executes normalized tool blocks.
 
 Model profile fallback is explicit. The runtime starts with the requested profile and only switches to profiles named in `runtime.profileFallbackOrder`; profile names such as `fast` or `fallback` have no built-in behavior.
+
+The `ollama` provider uses native `/api/chat`, sends `think=false`, and maps EvoLoop `maxTokens` to Ollama `num_predict`. This keeps Qwen-style reasoning models usable with JSON-ReAct fallback because the provider reads `message.content` instead of OpenAI-compatible reasoning-only responses.
 
 ## Execution Modes
 

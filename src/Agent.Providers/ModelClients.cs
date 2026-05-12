@@ -32,9 +32,12 @@ public sealed class ModelClientRouter : IModelClientRouter, IModelAdapterRouter,
             throw new InvalidOperationException($"Model profile '{profileName}' not found in config.");
         }
 
-        IModelClient client = profile.Provider.Equals("openai", StringComparison.OrdinalIgnoreCase)
-            ? new OpenAiCompatibleClient(_httpClient, _config, profile)
-            : new CustomGatewayClient(_httpClient, _config, profile);
+        IModelClient client = profile.Provider.Trim().ToLowerInvariant() switch
+        {
+            "openai" => new OpenAiCompatibleClient(_httpClient, _config, profile),
+            "ollama" => new OllamaChatClient(_httpClient, _config, profile),
+            _ => new CustomGatewayClient(_httpClient, _config, profile)
+        };
 
         _clientCache[profileName] = client;
         return client;

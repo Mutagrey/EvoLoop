@@ -10,6 +10,8 @@ internal static class ProviderAndParserTests
     {
         ("OpenAI provider retries without response_format when rejected", TestOpenAiProviderResponseFormatFallback),
         ("Custom provider retries system prompt as user message when rejected", TestCustomProviderSystemPromptFallback),
+        ("Ollama provider sends native chat payload with think disabled", TestOllamaProviderPayload),
+        ("Provider rooted paths resolve against base URL in offline strict mode", TestRootedProviderPathUsesBaseUrlHost),
         ("Plain text recovery parser recovers Action Arguments", TestPlainTextRecoveryParser),
         ("Tool error result becomes structured error message", TestToolErrorResultMessage)
     };
@@ -85,6 +87,68 @@ static async Task TestCustomProviderSystemPromptFallback()
     var firstMessage = second.RootElement.GetProperty("messages")[0];
     Assert(firstMessage.GetProperty("role").GetString() == "user", "Expected fallback system prompt to be sent as a user message.");
     Assert(firstMessage.GetProperty("content").GetString()?.Contains("SYSTEM INSTRUCTIONS", StringComparison.Ordinal) == true, "Expected fallback user message to contain system prompt wrapper.");
+}
+
+static async Task TestOllamaProviderPayload()
+{
+    var handler = new RecordingHttpHandler((_, _) => new HttpResponseMessage(HttpStatusCode.OK)
+    {
+        Content = new StringContent("{\"model\":\"qwen3.5:9b\",\"message\":{\"role\":\"assistant\",\"content\":\"{\\\"type\\\":\\\"final\\\",\\\"message\\\":\\\"ok\\\"}\"},\"prompt_eval_count\":3,\"eval_count\":4}")
+    });
+
+    var config = new AgentConfig
+    {
+        Api = new ApiConfig
+        {
+            BaseUrl = "http://localhost:11434",
+            CustomPath = "/api/chat",
+            PreferJsonResponseFormat = true,
+            SystemPromptMode = "system"
+        }
+    };
+
+    var client = new OllamaChatClient(new HttpClient(handler), config, new ModelProfileConfig { Provider = "ollama", Model = "qwen3.5:9b" });
+    var result = await client.CompleteAsync(CreateProviderRequest() with { Model = "qwen3.5:9b" }, CancellationToken.None);
+
+    Assert(result.Content.Contains("\"ok\"", StringComparison.Ordinal), "Expected Ollama message.content to be extracted.");
+    Assert(result.PromptTokens == 3, "Expected prompt eval count to map to prompt tokens.");
+    Assert(result.CompletionTokens == 4, "Expected eval count to map to completion tokens.");
+    using var body = JsonDocument.Parse(handler.RequestBodies.Single());
+    Assert(body.RootElement.GetProperty("think").GetBoolean() == false, "Expected Ollama thinking to be disabled.");
+    Assert(body.RootElement.GetProperty("format").GetString() == "json", "Expected Ollama JSON format.");
+    Assert(body.RootElement.GetProperty("options").GetProperty("num_predict").GetInt32() == 256, "Expected max tokens to map to num_predict.");
+}
+
+static async Task TestRootedProviderPathUsesBaseUrlHost()
+{
+    var handler = new RecordingHttpHandler((_, request) =>
+    {
+        Assert(request.RequestUri?.Host == "localhost", "Expected rooted API path to preserve base URL host.");
+        Assert(request.RequestUri?.AbsolutePath == "/api/chat", "Expected rooted API path to use requested endpoint path.");
+        return new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("{\"model\":\"fake\",\"message\":{\"role\":\"assistant\",\"content\":\"{\\\"type\\\":\\\"final\\\",\\\"message\\\":\\\"ok\\\"}\"}}")
+        };
+    });
+
+    var config = new AgentConfig
+    {
+        Api = new ApiConfig
+        {
+            BaseUrl = "http://localhost:11434",
+            CustomPath = "/api/chat",
+            PreferJsonResponseFormat = true
+        },
+        Safety = new SafetyConfig
+        {
+            OfflineStrictMode = true,
+            AllowedNetworkHosts = new List<string> { "localhost" }
+        }
+    };
+
+    var client = new OllamaChatClient(new HttpClient(handler), config, new ModelProfileConfig { Provider = "ollama", Model = "fake" });
+    var result = await client.CompleteAsync(CreateProviderRequest(), CancellationToken.None);
+    Assert(result.Content.Contains("\"ok\"", StringComparison.Ordinal), "Expected request to pass offline strict host check.");
 }
 
 static ModelTurnRequest CreateProviderRequest()

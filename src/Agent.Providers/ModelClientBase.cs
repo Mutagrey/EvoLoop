@@ -63,11 +63,6 @@ internal abstract class ModelClientBase : IModelClient
             throw new InvalidOperationException("Api.baseUrl is empty.");
         }
 
-        if (Uri.TryCreate(pathOrAbsoluteUrl, UriKind.Absolute, out var absolute))
-        {
-            return absolute;
-        }
-
         if (!Uri.TryCreate(baseUrl, UriKind.Absolute, out var baseUri))
         {
             throw new InvalidOperationException($"Api.baseUrl is not a valid absolute URI: '{baseUrl}'.");
@@ -81,6 +76,14 @@ internal abstract class ModelClientBase : IModelClient
         if (pathOrAbsoluteUrl.StartsWith("/", StringComparison.Ordinal))
         {
             return new Uri($"{baseUri.Scheme}://{baseUri.Authority}{pathOrAbsoluteUrl}");
+        }
+
+        if (Uri.TryCreate(pathOrAbsoluteUrl, UriKind.Absolute, out var absolute) &&
+            !string.IsNullOrWhiteSpace(absolute.Scheme) &&
+            (absolute.Scheme.Equals(Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase) ||
+             absolute.Scheme.Equals(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)))
+        {
+            return absolute;
         }
 
         var normalizedBase = baseUri.AbsoluteUri.EndsWith("/", StringComparison.Ordinal)

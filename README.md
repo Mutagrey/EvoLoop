@@ -71,6 +71,24 @@ dotnet run --project src/Agent.Cli -- run "inspect repository and summarize curr
 dotnet run --project src/Agent.Tui --
 ```
 
+Local Ollama profile example:
+
+```json
+{
+  "api": {
+    "baseUrl": "http://localhost:11434",
+    "customPath": "/api/chat"
+  },
+  "models": {
+    "reasoning": {
+      "provider": "ollama",
+      "model": "qwen3.5:9b",
+      "toolCallingMode": "JsonReActFallback"
+    }
+  }
+}
+```
+
 If `.tooling/dotnet8` exists, the helper scripts automatically prefer that local SDK instead of a system-wide install.
 
 ## Build And Publish

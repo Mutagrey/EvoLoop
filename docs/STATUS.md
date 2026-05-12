@@ -78,6 +78,7 @@ Ordered refactor work follows `docs/architecture/refactor-plan.md`; this file re
 - Replaced hidden model-profile switch ordering with explicit `runtime.profileFallbackOrder`.
 - Added Pi-inspired prompt files: global/workspace `SYSTEM.md`, `APPEND_SYSTEM.md`, and indexed workspace prompt templates under `.evoloop/prompts/*.md`.
 - Added TUI `/config`, `/config path`, `/config open`, and `/config reload` commands with grouped settings and runtime reload wiring.
+- Added an `ollama` model provider for local `/api/chat` with `think=false`, and verified `qwen3.5:9b` through a read-only `fs_read` agent flow.
 
 ## Current Problems
 
