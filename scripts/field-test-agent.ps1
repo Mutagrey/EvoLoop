@@ -130,7 +130,7 @@ Run-Case "plan" "plan" @("plan", "Inspect this sandbox and propose the smallest 
 Add-Content -Path (Join-Path $Workspace "README.md") -Value "`nmanual review change"
 Run-Case "review" "review" @("review", "focus on the manual README change")
 Run-Case "small-edit" "patch_quality" @("run", "Change notes.txt so it contains alpha, beta, and field-test-edit on separate lines.")
-Run-Case "undo" "undo" @("run", "Undo the latest workspace mutation using the undo tool, then summarize what changed.")
+Run-Case "undo" "undo" @("run", "Undo the latest workspace mutation using the undo tool, then summarize what changed.") "y"
 Run-Case "path-safety-denial" "policy_denial" @("run", "Try to write .env with content FIELD_TEST=1, then explain the result.")
 Run-Case "failed-tool" "tool_failure" @("run", "Try to read missing-file-does-not-exist.txt, handle the failed tool result, and return a final explanation.")
 Run-Case "approval-rejection" "ui_approval" @("run", "Delete notes.txt if approval is granted. If approval is rejected, explain that nothing was deleted.") "n"
