@@ -141,6 +141,84 @@ internal abstract class ModelClientBase : IModelClient
         return $"{providerLabel} request failed ({(int)statusCode}) endpoint='{endpoint}'.{hint} Response: {raw}";
     }
 
+    protected static bool IsSuccessStatusCode(HttpStatusCode statusCode)
+    {
+        var code = (int)statusCode;
+        return code >= 200 && code <= 299;
+    }
+
+    protected async Task<(HttpStatusCode StatusCode, string Raw)> SendWithSystemPromptFallbackAsync(
+        SystemPromptDeliveryMode initialMode,
+        Func<SystemPromptDeliveryMode, CancellationToken, Task<(HttpStatusCode StatusCode, string Raw)>> send,
+        CancellationToken ct)
+    {
+        var (statusCode, raw) = await send(initialMode, ct);
+        if (!IsSuccessStatusCode(statusCode) &&
+            ShouldFallbackSystemPromptToUserMessage(initialMode) &&
+            IsSystemPromptRejected(statusCode, raw))
+        {
+            (statusCode, raw) = await send(SystemPromptDeliveryMode.UserMessage, ct);
+        }
+
+        return (statusCode, raw);
+    }
+
+    protected async Task<(HttpStatusCode StatusCode, string Raw)> SendWithResponseFormatFallbackAsync(
+        SystemPromptDeliveryMode mode,
+        Func<bool, SystemPromptDeliveryMode, CancellationToken, Task<(HttpStatusCode StatusCode, string Raw)>> send,
+        CancellationToken ct)
+    {
+        var useResponseFormat = Config.Api.PreferJsonResponseFormat;
+        var (statusCode, raw) = await send(useResponseFormat, mode, ct);
+        if (!IsSuccessStatusCode(statusCode) &&
+            useResponseFormat &&
+            Config.Api.ResponseFormatFallbackWithoutJson &&
+            IsResponseFormatRejected(statusCode, raw))
+        {
+            (statusCode, raw) = await send(false, mode, ct);
+        }
+
+        return (statusCode, raw);
+    }
+
+    protected Task<(HttpStatusCode StatusCode, string Raw)> SendWithPromptAndResponseFormatFallbackAsync(
+        SystemPromptDeliveryMode initialMode,
+        Func<bool, SystemPromptDeliveryMode, CancellationToken, Task<(HttpStatusCode StatusCode, string Raw)>> send,
+        CancellationToken ct)
+    {
+        return SendWithSystemPromptFallbackAsync(
+            initialMode,
+            (mode, token) => SendWithResponseFormatFallbackAsync(mode, send, token),
+            ct);
+    }
+
+    protected async Task<ModelAdapterTurnResult> CompleteJsonReActFallbackAsync(ModelAdapterTurnRequest request, CancellationToken ct)
+    {
+        var result = await CompleteAsync(new ModelTurnRequest(
+            request.ProfileName,
+            request.Model,
+            request.SystemPrompt,
+            request.Messages,
+            request.Temperature,
+            request.MaxTokens,
+            request.Metadata), ct);
+
+        var assistant = JsonReActResponseParser.Parse(
+            result.Content,
+            request.Tools.Select(tool => tool.Name),
+            allowPlainTextRecovery: true,
+            mode: ToolCallingMode.JsonReActFallback);
+
+        return new ModelAdapterTurnResult(
+            assistant,
+            result.Model,
+            result.PromptTokens,
+            result.CompletionTokens,
+            result.TotalTokens,
+            result.Raw,
+            ToolCallingMode.JsonReActFallback);
+    }
+
     protected static bool IsResponseFormatRejected(HttpStatusCode statusCode, string raw)
     {
         if (statusCode != HttpStatusCode.BadRequest && (int)statusCode != 422)
@@ -214,4 +292,3 @@ internal enum SystemPromptDeliveryMode
     UserMessage,
     Both
 }
-

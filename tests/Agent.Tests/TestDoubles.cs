@@ -1,4 +1,5 @@
 using Agent.Core;
+using System.Net;
 
 internal sealed class FakeModelClient : IModelClient
 {
@@ -21,6 +22,27 @@ internal sealed class FakeModelClient : IModelClient
         }
 
         return Task.FromResult(_responses.Dequeue());
+    }
+}
+
+internal sealed class RecordingHttpHandler : HttpMessageHandler
+{
+    private readonly Func<int, HttpRequestMessage, HttpResponseMessage> _respond;
+
+    public RecordingHttpHandler(Func<int, HttpRequestMessage, HttpResponseMessage> respond)
+    {
+        _respond = respond;
+    }
+
+    public List<string> RequestBodies { get; } = new();
+
+    protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+    {
+        RequestBodies.Add(request.Content is null
+            ? string.Empty
+            : await request.Content.ReadAsStringAsync(cancellationToken));
+
+        return _respond(RequestBodies.Count, request);
     }
 }
 

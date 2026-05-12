@@ -14,38 +14,17 @@ internal sealed class CustomGatewayClient : ModelClientBase, IModelAdapter
     public ModelAdapterCapabilities AdapterCapabilities => ModelAdapterCapabilities.JsonOnly;
 
     public async Task<ModelAdapterTurnResult> CompleteTurnAsync(ModelAdapterTurnRequest request, CancellationToken ct)
-    {
-        var result = await CompleteAsync(new ModelTurnRequest(
-            request.ProfileName,
-            request.Model,
-            request.SystemPrompt,
-            request.Messages,
-            request.Temperature,
-            request.MaxTokens,
-            request.Metadata), ct);
-
-        var assistant = JsonReActResponseParser.Parse(
-            result.Content,
-            request.Tools.Select(tool => tool.Name),
-            allowPlainTextRecovery: true,
-            mode: ToolCallingMode.JsonReActFallback);
-
-        return new ModelAdapterTurnResult(
-            assistant,
-            result.Model,
-            result.PromptTokens,
-            result.CompletionTokens,
-            result.TotalTokens,
-            result.Raw,
-            ToolCallingMode.JsonReActFallback);
-    }
+        => await CompleteJsonReActFallbackAsync(request, ct);
 
     protected override async Task<ModelTurnResult> CompleteCoreAsync(ModelTurnRequest request, CancellationToken ct)
     {
         var endpoint = BuildEndpoint(Config.Api.BaseUrl, Config.Api.CustomPath);
         EnsureEndpointAllowed(endpoint);
         var initialMode = ResolveSystemPromptMode();
-        var (statusCode, raw) = await SendWithPromptFallbackAsync(endpoint, request, initialMode, ct);
+        var (statusCode, raw) = await SendWithPromptAndResponseFormatFallbackAsync(
+            initialMode,
+            (useResponseFormat, mode, token) => SendCustomRequestAsync(endpoint, request, useResponseFormat, mode, token),
+            ct);
 
         if (!IsSuccessStatusCode(statusCode))
         {
@@ -70,42 +49,6 @@ internal sealed class CustomGatewayClient : ModelClientBase, IModelAdapter
         }
 
         return new ModelTurnResult(content, model, prompt, completion, total, raw);
-    }
-
-    private async Task<(HttpStatusCode StatusCode, string Raw)> SendWithPromptFallbackAsync(
-        Uri endpoint,
-        ModelTurnRequest request,
-        SystemPromptDeliveryMode initialMode,
-        CancellationToken ct)
-    {
-        var (statusCode, raw) = await SendWithResponseFormatFallbackAsync(endpoint, request, initialMode, ct);
-        if (!IsSuccessStatusCode(statusCode) &&
-            ShouldFallbackSystemPromptToUserMessage(initialMode) &&
-            IsSystemPromptRejected(statusCode, raw))
-        {
-            (statusCode, raw) = await SendWithResponseFormatFallbackAsync(endpoint, request, SystemPromptDeliveryMode.UserMessage, ct);
-        }
-
-        return (statusCode, raw);
-    }
-
-    private async Task<(HttpStatusCode StatusCode, string Raw)> SendWithResponseFormatFallbackAsync(
-        Uri endpoint,
-        ModelTurnRequest request,
-        SystemPromptDeliveryMode mode,
-        CancellationToken ct)
-    {
-        var useResponseFormat = Config.Api.PreferJsonResponseFormat;
-        var (statusCode, raw) = await SendCustomRequestAsync(endpoint, request, useResponseFormat, mode, ct);
-        if (!IsSuccessStatusCode(statusCode) &&
-            useResponseFormat &&
-            Config.Api.ResponseFormatFallbackWithoutJson &&
-            IsResponseFormatRejected(statusCode, raw))
-        {
-            (statusCode, raw) = await SendCustomRequestAsync(endpoint, request, false, mode, ct);
-        }
-
-        return (statusCode, raw);
     }
 
     private async Task<(HttpStatusCode StatusCode, string Raw)> SendCustomRequestAsync(
@@ -149,12 +92,6 @@ internal sealed class CustomGatewayClient : ModelClientBase, IModelAdapter
 
         list.AddRange(request.Messages.Select(m => new { role = m.Role, content = m.Content }));
         return list.ToArray();
-    }
-
-    private static bool IsSuccessStatusCode(HttpStatusCode statusCode)
-    {
-        var code = (int)statusCode;
-        return code >= 200 && code <= 299;
     }
 
     private static string ExtractContent(JsonElement root)

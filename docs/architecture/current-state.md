@@ -59,7 +59,7 @@ Events and UI:
 - `ReActAgentLoop` is the main hotspot. It owns step orchestration, model fallback switching, response validation, deterministic recovery, path hints, history compaction, memory save, event writes, and final/error handling.
 - `CliSession` mixes REPL command parsing, local degraded review fallback, runtime task dispatch, config formatting, command history, and undo.
 - `Agent.Core` is not pure runtime logic. It directly reads files, directories, environment variables, and starts capability probe processes.
-- Provider clients duplicate prompt fallback, response-format fallback, success-code checks, message shaping, and JSON-ReAct fallback wrapping.
+- Provider clients share prompt fallback, response-format fallback, success-code checks, and JSON-ReAct fallback wrapping through `ModelClientBase`; provider-specific message shaping remains local.
 - Tool/workspace concerns are split awkwardly: `PathSafety` is in Core and `ToolPath` is in Tools.
 - Small string/path helpers are duplicated: `CommandExists`, auth detection, `ToOneLine`, `NormalizePath`, and `Clip`.
 - Tool activity summaries now travel as event metadata, while some older UI fallback parsing remains for compatibility.
@@ -83,10 +83,6 @@ No definitely removable production code was confirmed in this audit. The remaini
   - `ProcessRunner.CommandExists`
   - `AgentStartup.HasApiAuthConfigured`
   - `RuntimeCapabilityProbe.HasApiAuthConfigured`
-- Duplicate provider fallback flow:
-  - `OpenAiCompatibleClient.SendWithPromptFallbackAsync`
-  - `CustomGatewayClient.SendWithPromptFallbackAsync`
-  - response-format fallback and `IsSuccessStatusCode` in both clients.
 - Stale documented state:
   - minimal TUI is intentionally pending integration.
   - checked-in Windows bundles have not been regenerated for `Agent.Tui`.

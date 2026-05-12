@@ -56,6 +56,7 @@
 - Moved ReAct profile selection, model limits, tool-calling mode lookup, and switch-threshold handling into a focused runtime collaborator.
 - Completed Phase 3 runtime separation with centralized normalized message-history append helpers for user, assistant, and tool-result turns.
 - Completed Phase 4 tool cleanup: kept `ToolCatalog.CreateDefaultTools()` as the default registry path, centralized workspace scan skip rules, centralized mutation snapshot manifests, and added structured tool activity metadata for UI/event consumers.
+- Completed Phase 5 LLM adapter cleanup: provider fallback helpers now live in `ModelClientBase`, OpenAI/custom gateway request compatibility is covered by focused provider payload tests, and native tool-call behavior remains unchanged.
 
 ## Current Problems
 

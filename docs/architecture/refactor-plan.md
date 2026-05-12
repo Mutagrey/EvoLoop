@@ -47,14 +47,14 @@ This plan is ordered for small, low-risk cleanup batches. Do not start feature e
 
 ## Phase 5: LLM Adapter Cleanup
 
-- [ ] Deduplicate provider fallback helpers in `ModelClientBase`:
+- [x] Deduplicate provider fallback helpers in `ModelClientBase`:
   - HTTP success check
   - system prompt fallback
   - response_format fallback
   - JSON-ReAct fallback wrapping
-- [ ] Keep OpenAI-compatible native non-streaming and streaming behavior unchanged.
-- [ ] Keep custom gateway compatibility unchanged.
-- [ ] Add tests for provider message formatting before changing request shapes.
+- [x] Keep OpenAI-compatible native non-streaming and streaming behavior unchanged.
+- [x] Keep custom gateway compatibility unchanged.
+- [x] Add tests for provider message formatting before changing request shapes.
 
 ## Phase 6: Prompt And Skill Cleanup
 

@@ -53,7 +53,10 @@ internal sealed class OpenAiCompatibleClient : ModelClientBase, IModelAdapter
         var endpoint = BuildEndpoint(Config.Api.BaseUrl, Config.Api.OpenAiCompatiblePath);
         EnsureEndpointAllowed(endpoint);
         var initialMode = ResolveSystemPromptMode();
-        var (statusCode, raw) = await SendWithPromptFallbackAsync(endpoint, request, initialMode, ct);
+        var (statusCode, raw) = await SendWithPromptAndResponseFormatFallbackAsync(
+            initialMode,
+            (useResponseFormat, mode, token) => SendOpenAiRequestAsync(endpoint, request, useResponseFormat, mode, token),
+            ct);
 
         if (!IsSuccessStatusCode(statusCode))
         {
@@ -80,38 +83,17 @@ internal sealed class OpenAiCompatibleClient : ModelClientBase, IModelAdapter
     }
 
     private async Task<ModelAdapterTurnResult> CompleteJsonFallbackAsync(ModelAdapterTurnRequest request, CancellationToken ct)
-    {
-        var result = await CompleteAsync(new ModelTurnRequest(
-            request.ProfileName,
-            request.Model,
-            request.SystemPrompt,
-            request.Messages,
-            request.Temperature,
-            request.MaxTokens,
-            request.Metadata), ct);
-
-        var assistant = JsonReActResponseParser.Parse(
-            result.Content,
-            request.Tools.Select(tool => tool.Name),
-            allowPlainTextRecovery: true,
-            mode: ToolCallingMode.JsonReActFallback);
-
-        return new ModelAdapterTurnResult(
-            assistant,
-            result.Model,
-            result.PromptTokens,
-            result.CompletionTokens,
-            result.TotalTokens,
-            result.Raw,
-            ToolCallingMode.JsonReActFallback);
-    }
+        => await CompleteJsonReActFallbackAsync(request, ct);
 
     private async Task<ModelAdapterTurnResult> CompleteNativeNonStreamingAsync(ModelAdapterTurnRequest request, CancellationToken ct)
     {
         var endpoint = BuildEndpoint(Config.Api.BaseUrl, Config.Api.OpenAiCompatiblePath);
         EnsureEndpointAllowed(endpoint);
         var initialMode = ResolveSystemPromptMode();
-        var (statusCode, raw) = await SendNativeWithPromptFallbackAsync(endpoint, request, initialMode, stream: false, ct);
+        var (statusCode, raw) = await SendWithSystemPromptFallbackAsync(
+            initialMode,
+            (mode, token) => SendNativeOpenAiRequestAsync(endpoint, request, mode, stream: false, token),
+            ct);
 
         if (!IsSuccessStatusCode(statusCode))
         {
@@ -161,24 +143,6 @@ internal sealed class OpenAiCompatibleClient : ModelClientBase, IModelAdapter
         }
 
         return _probedMode.Value;
-    }
-
-    private async Task<(HttpStatusCode StatusCode, string Raw)> SendNativeWithPromptFallbackAsync(
-        Uri endpoint,
-        ModelAdapterTurnRequest request,
-        SystemPromptDeliveryMode initialMode,
-        bool stream,
-        CancellationToken ct)
-    {
-        var (statusCode, raw) = await SendNativeOpenAiRequestAsync(endpoint, request, initialMode, stream, ct);
-        if (!IsSuccessStatusCode(statusCode) &&
-            ShouldFallbackSystemPromptToUserMessage(initialMode) &&
-            IsSystemPromptRejected(statusCode, raw))
-        {
-            (statusCode, raw) = await SendNativeOpenAiRequestAsync(endpoint, request, SystemPromptDeliveryMode.UserMessage, stream, ct);
-        }
-
-        return (statusCode, raw);
     }
 
     private async Task<(HttpStatusCode StatusCode, string Raw)> SendNativeOpenAiRequestAsync(
@@ -332,42 +296,6 @@ internal sealed class OpenAiCompatibleClient : ModelClientBase, IModelAdapter
         return baseMessage;
     }
 
-    private async Task<(HttpStatusCode StatusCode, string Raw)> SendWithPromptFallbackAsync(
-        Uri endpoint,
-        ModelTurnRequest request,
-        SystemPromptDeliveryMode initialMode,
-        CancellationToken ct)
-    {
-        var (statusCode, raw) = await SendWithResponseFormatFallbackAsync(endpoint, request, initialMode, ct);
-        if (!IsSuccessStatusCode(statusCode) &&
-            ShouldFallbackSystemPromptToUserMessage(initialMode) &&
-            IsSystemPromptRejected(statusCode, raw))
-        {
-            (statusCode, raw) = await SendWithResponseFormatFallbackAsync(endpoint, request, SystemPromptDeliveryMode.UserMessage, ct);
-        }
-
-        return (statusCode, raw);
-    }
-
-    private async Task<(HttpStatusCode StatusCode, string Raw)> SendWithResponseFormatFallbackAsync(
-        Uri endpoint,
-        ModelTurnRequest request,
-        SystemPromptDeliveryMode mode,
-        CancellationToken ct)
-    {
-        var useResponseFormat = Config.Api.PreferJsonResponseFormat;
-        var (statusCode, raw) = await SendOpenAiRequestAsync(endpoint, request, useResponseFormat, mode, ct);
-        if (!IsSuccessStatusCode(statusCode) &&
-            useResponseFormat &&
-            Config.Api.ResponseFormatFallbackWithoutJson &&
-            IsResponseFormatRejected(statusCode, raw))
-        {
-            (statusCode, raw) = await SendOpenAiRequestAsync(endpoint, request, false, mode, ct);
-        }
-
-        return (statusCode, raw);
-    }
-
     private static List<object> BuildMessages(ModelTurnRequest request, SystemPromptDeliveryMode mode)
     {
         var list = new List<object>();
@@ -412,10 +340,4 @@ internal sealed class OpenAiCompatibleClient : ModelClientBase, IModelAdapter
         return (response.StatusCode, raw);
     }
 
-    private static bool IsSuccessStatusCode(HttpStatusCode statusCode)
-    {
-        var code = (int)statusCode;
-        return code >= 200 && code <= 299;
-    }
 }
-
