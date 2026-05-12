@@ -35,7 +35,9 @@ Available themes:
 
 - `/help`: show available TUI commands.
 - `/status`: show the last task status.
-- `/model`: show active model, provider, gateway, auth, and tool-calling mode.
+- `/model`: open a model-profile picker for the current TUI session.
+- `/model <profile>`: switch model profile for the current TUI session without changing config.
+- `/model status`: show active model, provider, gateway, auth, and tool-calling mode.
 - `/models`: list configured model profiles and fallback order.
 - `/skills`: list workspace skills from `.evoloop/skills/**/SKILL.md`.
 - `/config`: show grouped settings: connection, model profiles, safety, tool calling, limits, prompts, and storage.
@@ -49,7 +51,7 @@ Available themes:
 - `/diff next`, `/diff prev`, `/diff <number>`: navigate latest review diff files.
 - `/exit`: close the TUI.
 
-Normal text runs through the shared agent runtime in `run` mode. Model-backed `run` and `plan` still require a configured model gateway; `review` can use the local degraded fallback when model execution is unavailable.
+Normal text runs through the shared agent runtime in `run` mode. Model-backed `run` and `plan` still require a configured model gateway; `review` can use the local degraded fallback when model execution is unavailable. Long command output such as `/config` opens at the start of the new result; use transcript scrolling to continue through it.
 
 ```bash
 dotnet run --project src/Agent.Tui --
@@ -60,10 +62,19 @@ dotnet run --project src/Agent.Tui --
 - `Enter`: submit input.
 - `Tab`: complete the selected slash-command suggestion.
 - `Up` / `Down`: move through visible slash-command suggestions when the input starts with `/`.
+- `Up` / `Down`, `PageUp` / `PageDown`, `Home` / `End`: navigate active picker menus.
+- `PageUp` / `PageDown`: scroll the transcript.
+- `Home` / `End`: jump transcript to top or bottom.
+- Mouse wheel: scroll the transcript when supported by the terminal.
+- `Esc`: cancel the current running task; when a picker is open, close the picker.
 - `Ctrl+C`: close the TUI.
 - `Ctrl+D`: close the TUI when input is empty.
 
 ## Known Limitations
 
-- Approval requests use a basic blocking approve/reject dialog; default `AutoEdit` skips prompts for writes and patches but still prompts for destructive actions.
-- No session list or slash suggestion popup yet.
+- `/config` is still a rendered settings summary, not a full settings editor.
+- No session list yet.
+
+## Migration Notes
+
+- `/model` now opens the picker. Use `/model status` for the previous model-status text output.

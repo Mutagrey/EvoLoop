@@ -13,6 +13,20 @@ tests.AddRange(ProviderAndParserTests.All);
 tests.AddRange(SearchMemoryPatchTests.All);
 tests.AddRange(SafetySearchTests.All);
 
+if (args.Length > 0)
+{
+    tests = tests
+        .Where(test => args.Any(filter =>
+            test.Name.Contains(filter, StringComparison.OrdinalIgnoreCase)))
+        .ToList();
+
+    if (tests.Count == 0)
+    {
+        Console.Error.WriteLine($"No tests matched filter: {string.Join(", ", args)}");
+        return 1;
+    }
+}
+
 var failed = 0;
 foreach (var test in tests)
 {

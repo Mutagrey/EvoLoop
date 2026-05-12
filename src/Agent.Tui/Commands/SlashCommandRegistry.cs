@@ -41,7 +41,7 @@ internal sealed class SlashCommandRegistry
                 registry => new TuiCommandResult(true, false, false, registry.BuildHelpText())),
             AppHandled("/config", "Show grouped runtime config.", "/config [path|open|reload]"),
             AppHandled("/diff", "Navigate latest review diff.", "/diff [files|next|prev|number]"),
-            AppHandled("/model", "Show active model and gateway state.", "/model"),
+            AppHandled("/model", "Pick or show active model profile.", "/model [profile|status]"),
             AppHandled("/models", "List model profiles and fallback order.", "/models"),
             AppHandled("/plan", "Run read-only plan mode.", "/plan <task>"),
             AppHandled("/review", "Review current workspace changes.", "/review [focus]"),

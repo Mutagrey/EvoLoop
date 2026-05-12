@@ -87,13 +87,16 @@ Ordered refactor work follows `docs/architecture/refactor-plan.md`; this file re
 - Stopped run scripts from overriding `HOME` so user-level config such as `~/.evoloop-agent/config.json` is visible when launching `agent`.
 - Removed `win-arm64` packaging support; Windows distribution is `win-x64` only.
 - Switched the default approval mode to `AutoEdit`, allowing normal workspace writes/patches without repeated prompts while keeping destructive actions approval-gated.
+- Added scrollable TUI transcript navigation so long `/config` output can be read with `PageUp`, `PageDown`, `Home`, `End`, and supported mouse wheels.
+- Added a reusable TUI picker used by `/model` session profile switching and approval prompts; `/model status` keeps the previous model summary output.
+- Added TUI task cancellation through `Esc` while keeping `Esc` as picker cancel when a picker is active.
 
 ## Current Problems
 
 - No packaged Windows smoke test has been executed yet against the new `win-x64` publish path.
 - The agent still depends on a remote/local model gateway for autonomous `run` and `plan` execution; `local-only degraded` mode is still diagnostic-safe, not a replacement for a local model runtime.
 - `dotnet run --project tests/Agent.Tests/Agent.Tests.csproj` can still hang in this macOS workspace while spawning MSBuild child nodes; build the solution first and run the compiled test DLL directly as documented in `docs/TESTING.md`.
-- TUI approval uses a basic blocking dialog.
+- TUI `/config` is still a rendered settings summary, not a full settings editor.
 
 ## Next Improvements
 

@@ -13,11 +13,16 @@ internal static class TuiTests
         ("TUI theme resolves default and no-color variants", TestTuiThemeResolution),
         ("TUI app rejects task when runtime is not attached", TestTuiAppRejectsTaskWithoutRuntime),
         ("TUI app dispatches plain input as run", TestTuiAppDispatchesPlainInputAsRun),
+        ("TUI app cancels a running task", TestTuiAppCancelsRunningTask),
         ("TUI app dispatches plan command as read-only plan", TestTuiAppDispatchesPlanCommand),
         ("TUI app dispatches review command as read-only review", TestTuiAppDispatchesReviewCommand),
         ("TUI app navigates review diffs", TestTuiAppNavigatesReviewDiffs),
+        ("TUI choice menu navigates and skips disabled items", TestTuiChoiceMenuNavigation),
+        ("TUI choice menu confirms and cancels", TestTuiChoiceMenuConfirmCancel),
+        ("TUI transcript scroll state tracks viewport offset", TestTuiTranscriptScrollState),
         ("TUI app reports unknown slash command", TestTuiUnknownSlashCommand),
-        ("TUI app shows model and skills commands", TestTuiModelAndSkillsCommands),
+        ("TUI app opens model picker and switches profiles", TestTuiModelPickerAndSwitch),
+        ("TUI app shows model status and skills commands", TestTuiModelStatusAndSkillsCommands),
         ("TUI config command renders grouped settings", TestTuiConfigCommandRendersGroupedSettings),
         ("TUI config path command shows config paths", TestTuiConfigPathCommandShowsConfigPaths),
         ("TUI config open command uses attached opener", TestTuiConfigOpenCommandUsesAttachedOpener),
@@ -102,6 +107,25 @@ static async Task TestTuiAppDispatchesPlainInputAsRun()
     Assert(runner.Calls[0].ApprovalMode == ApprovalPolicyMode.AutoEdit, "Expected configured default approval mode.");
 }
 
+static async Task TestTuiAppCancelsRunningTask()
+{
+    var runner = new BlockingTuiTaskRunner();
+    var app = CreateTestTuiApp();
+    app.AttachTaskRunner(runner);
+
+    var run = app.SubmitAsync("long task", CancellationToken.None);
+    await runner.Started.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+    Assert(app.IsTaskRunning, "Expected task to be running before cancellation.");
+    Assert(app.CancelRunningTask(), "Expected cancellation request to be accepted.");
+
+    var result = await run;
+    Assert(result.IsError, "Expected cancelled task to return an error result.");
+    Assert(result.Message.Contains("cancelled", StringComparison.OrdinalIgnoreCase), "Expected cancelled result message.");
+    Assert(!app.IsTaskRunning, "Expected task running state to clear after cancellation.");
+    Assert(app.Messages.Any(m => m.Content.Contains("cancelling current task", StringComparison.Ordinal)), "Expected cancelling status message.");
+}
+
 static async Task TestTuiAppDispatchesPlanCommand()
 {
     var runner = new CapturingTuiTaskRunner();
@@ -175,6 +199,64 @@ class App { }
     Assert(first.Message.Contains("Diff 1/2: notes.txt", StringComparison.Ordinal), "Expected /diff 1 to select first file.");
 }
 
+static Task TestTuiChoiceMenuNavigation()
+{
+    var state = new ChoiceMenuState(new[]
+    {
+        new ChoiceMenuItem("a", "A", "first"),
+        new ChoiceMenuItem("b", "B", "disabled", IsDisabled: true),
+        new ChoiceMenuItem("c", "C", "third"),
+        new ChoiceMenuItem("d", "D", "fourth")
+    }, "a");
+
+    Assert(state.SelectedItem?.Id == "a", "Expected initial item.");
+    state.MoveNext(2);
+    Assert(state.SelectedItem?.Id == "c", "Expected navigation to skip disabled item.");
+    state.MovePrevious(2);
+    Assert(state.SelectedItem?.Id == "a", "Expected previous navigation to wrap past disabled item.");
+    state.MoveEnd(2);
+    Assert(state.SelectedItem?.Id == "d", "Expected End to select the last enabled item.");
+    Assert(state.TopIndex == 2, "Expected menu scroll to keep the selected item visible.");
+    state.MoveHome(2);
+    Assert(state.SelectedItem?.Id == "a", "Expected Home to select the first enabled item.");
+    return Task.CompletedTask;
+}
+
+static Task TestTuiChoiceMenuConfirmCancel()
+{
+    var state = new ChoiceMenuState(new[]
+    {
+        new ChoiceMenuItem("reject", "Reject", "default", IsCurrent: true),
+        new ChoiceMenuItem("approve", "Approve", "allow")
+    });
+
+    Assert(state.Confirm() == "reject", "Expected confirm to return the selected item id.");
+    state.MoveNext(2);
+    Assert(state.Confirm() == "approve", "Expected confirm to follow selection.");
+    Assert(ChoiceMenuState.Cancel() is null, "Expected cancel to return no selection.");
+    return Task.CompletedTask;
+}
+
+static Task TestTuiTranscriptScrollState()
+{
+    var scroll = new TranscriptScrollState();
+
+    Assert(scroll.GetStartLine(30, 10) == 20, "Expected bottom viewport start.");
+    scroll.ScrollPageUp(30, 10);
+    Assert(scroll.GetStartLine(30, 10) == 11, "Expected PageUp to move one page from bottom.");
+    scroll.PreserveVisibleContentAfterAppend(30, 35, 10);
+    Assert(scroll.GetStartLine(35, 10) == 11, "Expected appended output to preserve current visible line when scrolled up.");
+    scroll.ScrollTop(30, 10);
+    Assert(scroll.GetStartLine(30, 10) == 0, "Expected top viewport start.");
+    scroll.ScrollPageDown(30, 10);
+    Assert(scroll.GetStartLine(30, 10) == 9, "Expected PageDown to move toward bottom.");
+    scroll.ScrollBottom();
+    Assert(scroll.GetStartLine(30, 10) == 20, "Expected End/bottom to restore tail view.");
+    scroll.RevealLineAtTop(5, 50, 10);
+    Assert(scroll.GetStartLine(50, 10) == 5, "Expected long command output to reveal from its first line.");
+    return Task.CompletedTask;
+}
+
 static Task TestTuiUnknownSlashCommand()
 {
     var app = CreateTestTuiApp();
@@ -187,11 +269,35 @@ static Task TestTuiUnknownSlashCommand()
     return Task.CompletedTask;
 }
 
-static Task TestTuiModelAndSkillsCommands()
+static async Task TestTuiModelPickerAndSwitch()
+{
+    TuiChoiceMenuRequest? captured = null;
+    var app = CreateTestTuiApp(CreateModelRuntime());
+    app.AttachChoicePrompt((request, _) =>
+    {
+        captured = request;
+        return Task.FromResult<string?>("fast");
+    });
+
+    var picked = await app.SubmitAsync("/model", CancellationToken.None);
+
+    Assert(picked.Handled, "Expected /model picker command to be handled.");
+    Assert(captured is not null, "Expected /model to request a picker.");
+    Assert(captured!.Items.Count == 2, "Expected model picker items.");
+    Assert(captured.Items.Any(item => item.Id == "reasoning" && item.IsCurrent), "Expected active profile marker.");
+    Assert(app.Runtime.Profile == "fast", "Expected selected profile to become active for the session.");
+    Assert(app.Runtime.ModelId == "fast-model", "Expected selected profile details to update.");
+
+    var direct = app.Submit("/model reasoning");
+    Assert(direct.Handled, "Expected direct profile switch to be handled.");
+    Assert(app.Runtime.Profile == "reasoning", "Expected direct switch to update active profile.");
+}
+
+static Task TestTuiModelStatusAndSkillsCommands()
 {
     var app = CreateTestTuiApp();
 
-    var model = app.Submit("/model");
+    var model = app.Submit("/model status");
     Assert(model.Handled, "Expected /model to be handled.");
     Assert(model.Message.Contains("Model", StringComparison.Ordinal), "Expected model heading.");
     Assert(model.Message.Contains("active profile: reasoning", StringComparison.Ordinal), "Expected active model profile.");
@@ -539,10 +645,36 @@ static async Task TestAgentTaskRunnerLocalSnapshotReviewFallback()
     }
 }
 
-static TuiApp CreateTestTuiApp()
+static TuiRuntimeInfo CreateModelRuntime()
+{
+    return new TuiRuntimeInfo(
+        "/repo",
+        "/repo",
+        "reasoning",
+        "full",
+        "model ready",
+        ApprovalPolicyMode.AutoEdit,
+        TuiTheme.DefaultName,
+        false,
+        true,
+        true)
+    {
+        ModelProfiles = new[] { "fast", "reasoning" },
+        ModelProfileDetails = new[]
+        {
+            new TuiModelProfileInfo("fast", "custom", "fast-model", ToolCallingMode.JsonReActFallback),
+            new TuiModelProfileInfo("reasoning", "custom", "reasoning-model", ToolCallingMode.NativeNonStreamingTools)
+        },
+        ModelProvider = "custom",
+        ModelId = "reasoning-model",
+        ToolCallingMode = ToolCallingMode.NativeNonStreamingTools
+    };
+}
+
+static TuiApp CreateTestTuiApp(TuiRuntimeInfo? runtime = null)
 {
     return new TuiApp(
-        new TuiRuntimeInfo(
+        runtime ?? new TuiRuntimeInfo(
             "/repo",
             "/repo",
             "reasoning",
@@ -573,6 +705,24 @@ internal sealed class CapturingTuiTaskRunner : ITuiTaskRunner
     {
         Calls.Add(new TuiTaskRunnerCall(task, profile, executionMode, approvalMode));
         return Task.FromResult(Result);
+    }
+}
+
+internal sealed class BlockingTuiTaskRunner : ITuiTaskRunner
+{
+    public TaskCompletionSource<bool> Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    public async Task<AgentTaskRunResult> RunAsync(
+        string task,
+        string profile,
+        AgentExecutionMode executionMode,
+        ApprovalPolicyMode approvalMode,
+        IAgentRunObserver? observer,
+        CancellationToken ct)
+    {
+        Started.TrySetResult(true);
+        await Task.Delay(Timeout.InfiniteTimeSpan, ct);
+        throw new InvalidOperationException("Unreachable after cancellation.");
     }
 }
 

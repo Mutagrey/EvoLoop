@@ -17,19 +17,20 @@ Implemented:
 - add packaged `agent-cli.cmd` as the pure CLI wrapper
 - keep the old line REPL in `Agent.Cli`
 - vendor the TUI dependency packages for offline restore
-- Terminal.Gui shell with transcript, input line, status bar, `/help`, `/status`, `/model`, `/models`, `/skills`, `/plan`, `/review`, `/diff`, and `/exit`
+- Terminal.Gui shell with transcript, input line, status bar, `/help`, `/status`, `/model`, `/model status`, `/models`, `/skills`, `/plan`, `/review`, `/diff`, and `/exit`
 - theme layer with `claude-dark` and `mono`
 - TUI-local runtime observer and approval adapter connected to the shared `Agent.Hosting` runtime path
-- basic Terminal.Gui approve/reject dialog for runtime approval requests
+- reusable picker menu for session model selection and runtime approval requests
 - structured approval previews for file write and patch requests
 - compact runtime event formatting for model, tool, approval, memory, and session status lines
 - structured tool activity rendering for read, edit, search, command, explore, and failed tool completions
 - grouped transcript rendering with timestamps and role-specific colors
 - status-bar thinking/working spinner while a task is active
 - review diff navigation through `/diff`, `/diff files`, `/diff next`, `/diff prev`, and `/diff <number>`
-- model/profile inspection through `/model` and `/models`
+- model/profile selection through `/model`, direct session switch through `/model <profile>`, model inspection through `/model status`, and profile listing through `/models`
 - workspace skill index inspection through `/skills`
 - slash-command suggestion popup with `Tab` completion and `Up`/`Down` selection
+- transcript scrolling with `PageUp`, `PageDown`, `Home`, `End`, and mouse wheel support when reported by the terminal
 
 Normal text runs through the shared agent runtime in `run` mode. `/plan <task>` runs in read-only plan mode. `/review [focus]` runs review mode and can use the local degraded review fallback when model execution is unavailable.
 
@@ -69,6 +70,8 @@ The minimal shell supports:
 - `/help`
 - `/status`
 - `/model`
+- `/model status`
+- `/model <profile>`
 - `/models`
 - `/skills`
 - `/plan <task>`
@@ -77,6 +80,9 @@ The minimal shell supports:
 - `/exit`
 - `Ctrl+C` shutdown
 - `Ctrl+D` shutdown when input is empty
+- `Esc` cancels the current running task; inside a picker it closes the picker
+- `PageUp` / `PageDown` transcript scroll
+- `Home` / `End` transcript top/bottom
 - `--theme claude-dark|mono`
 - `--no-color` to force mono styling
 
@@ -90,7 +96,7 @@ Add session or memory inspection commands without changing Core, Tools, Provider
 
 Implemented command surfaces:
 
-- `/model`, `/models`: active model, profile list, fallback order, gateway state.
+- `/model`, `/model status`, `/models`: session model selection, active model state, profile list, fallback order, gateway state.
 - `/skills`: workspace skill index.
 - `/config`: structured runtime config and config file actions.
 - `/review`, `/diff`: review execution and latest diff navigation.

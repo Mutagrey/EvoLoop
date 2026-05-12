@@ -3,6 +3,12 @@ using Agent.Core;
 
 namespace Agent.Tui;
 
+internal sealed record TuiModelProfileInfo(
+    string Name,
+    string Provider,
+    string ModelId,
+    ToolCallingMode ToolCallingMode);
+
 internal sealed record TuiRuntimeInfo(
     string Workspace,
     string RequestedWorkspace,
@@ -118,7 +124,13 @@ internal sealed record TuiRuntimeInfo(
             7000,
             Array.Empty<string>())
     {
+        ModelProfileDetails = new[]
+        {
+            new TuiModelProfileInfo(Profile, "custom", "fake", ToolCallingMode.JsonReActFallback)
+        };
     }
+
+    public IReadOnlyList<TuiModelProfileInfo> ModelProfileDetails { get; init; } = Array.Empty<TuiModelProfileInfo>();
 
     public static TuiRuntimeInfo From(AgentRuntimeContext context, TuiArguments arguments, string themeName)
     {
@@ -176,7 +188,22 @@ internal sealed record TuiRuntimeInfo(
             runtime.MemoryEnabled,
             runtime.MemoryMaxRuns,
             runtime.MemoryContextMaxChars,
-            BuildPromptPaths(context.Workspace));
+            BuildPromptPaths(context.Workspace))
+        {
+            ModelProfileDetails = BuildModelProfileDetails(context.Config)
+        };
+    }
+
+    private static IReadOnlyList<TuiModelProfileInfo> BuildModelProfileDetails(AgentConfig config)
+    {
+        return config.Models
+            .OrderBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase)
+            .Select(pair => new TuiModelProfileInfo(
+                pair.Key,
+                pair.Value.Provider,
+                pair.Value.Model,
+                pair.Value.ToolCallingMode))
+            .ToArray();
     }
 
     private static IReadOnlyList<string> BuildPromptPaths(string workspaceRoot)

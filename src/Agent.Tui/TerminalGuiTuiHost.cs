@@ -132,6 +132,15 @@ internal sealed class TerminalGuiTuiHost
             ColorScheme = _theme.Chrome
         };
 
+        var choiceMenu = new ChoiceMenuView(_theme)
+        {
+            X = 0,
+            Y = 3,
+            Width = Dim.Fill(),
+            Height = Dim.Fill(4),
+            ColorScheme = _theme.Chrome
+        };
+
         var status = new Label(BuildStatusLine(app, 0))
         {
             X = 0,
@@ -144,6 +153,7 @@ internal sealed class TerminalGuiTuiHost
         var spinnerFrame = 0;
         var selectedSuggestion = 0;
         IReadOnlyList<SlashCommand> currentSuggestions = Array.Empty<SlashCommand>();
+        ActiveChoiceMenu? activeChoiceMenu = null;
 
         void RefreshTranscript()
         {
@@ -195,6 +205,150 @@ internal sealed class TerminalGuiTuiHost
             input.SetNeedsDisplay();
         }
 
+        bool HandleTranscriptNavigation(Key key)
+        {
+            if (key == Key.PageUp)
+            {
+                transcript.ScrollPageUp();
+                return true;
+            }
+
+            if (key == Key.PageDown)
+            {
+                transcript.ScrollPageDown();
+                return true;
+            }
+
+            if (key == Key.Home)
+            {
+                transcript.ScrollTop();
+                return true;
+            }
+
+            if (key == Key.End)
+            {
+                transcript.ScrollBottom();
+                return true;
+            }
+
+            return false;
+        }
+
+        void CloseChoiceMenu(string? selectedId)
+        {
+            var menu = activeChoiceMenu;
+            if (menu is null)
+            {
+                return;
+            }
+
+            activeChoiceMenu = null;
+            choiceMenu.ClearMenu();
+            RefreshSuggestions();
+            input.SetFocus();
+            menu.Completion.TrySetResult(selectedId);
+        }
+
+        bool HandleActiveChoiceMenuKey(Key key)
+        {
+            var menu = activeChoiceMenu;
+            if (menu is null)
+            {
+                return false;
+            }
+
+            if (key == (Key.CtrlMask | Key.C) || key == (Key.CtrlMask | Key.D))
+            {
+                return false;
+            }
+
+            var visible = choiceMenu.VisibleItemCount;
+            if (key == Key.CursorDown)
+            {
+                menu.State.MoveNext(visible);
+                choiceMenu.RefreshMenu();
+                return true;
+            }
+
+            if (key == Key.CursorUp)
+            {
+                menu.State.MovePrevious(visible);
+                choiceMenu.RefreshMenu();
+                return true;
+            }
+
+            if (key == Key.PageDown)
+            {
+                menu.State.PageDown(visible);
+                choiceMenu.RefreshMenu();
+                return true;
+            }
+
+            if (key == Key.PageUp)
+            {
+                menu.State.PageUp(visible);
+                choiceMenu.RefreshMenu();
+                return true;
+            }
+
+            if (key == Key.Home)
+            {
+                menu.State.MoveHome(visible);
+                choiceMenu.RefreshMenu();
+                return true;
+            }
+
+            if (key == Key.End)
+            {
+                menu.State.MoveEnd(visible);
+                choiceMenu.RefreshMenu();
+                return true;
+            }
+
+            if (key == Key.Enter)
+            {
+                CloseChoiceMenu(menu.State.Confirm());
+                return true;
+            }
+
+            if (key == Key.Esc)
+            {
+                CloseChoiceMenu(ChoiceMenuState.Cancel());
+                return true;
+            }
+
+            return true;
+        }
+
+        bool HandleSystemKey(Key key)
+        {
+            if (key == Key.Esc)
+            {
+                return app.CancelRunningTask();
+            }
+
+            if (key == (Key.CtrlMask | Key.C))
+            {
+                Stop();
+                return true;
+            }
+
+            if (key == (Key.CtrlMask | Key.D) && string.IsNullOrWhiteSpace(input.Text?.ToString()))
+            {
+                Stop();
+                return true;
+            }
+
+            return false;
+        }
+
+        bool HandleSharedKey(Key key)
+        {
+            return HandleActiveChoiceMenuKey(key) ||
+                   HandleSystemKey(key) ||
+                   HandleTranscriptNavigation(key);
+        }
+
         Application.MainLoop.AddTimeout(TimeSpan.FromMilliseconds(180), _ =>
         {
             if (app.IsTaskRunning)
@@ -209,7 +363,8 @@ internal sealed class TerminalGuiTuiHost
         });
 
         app.Changed += () => Application.MainLoop.Invoke(RefreshTranscript);
-        app.AttachApprovalPrompt(ShowApprovalDialogAsync);
+        app.AttachChoicePrompt(ShowChoiceMenuAsync);
+        app.AttachApprovalPrompt(ShowApprovalMenuAsync);
 
         void Stop()
         {
@@ -240,6 +395,12 @@ internal sealed class TerminalGuiTuiHost
         input.KeyPress += args =>
         {
             var key = args.KeyEvent.Key;
+            if (HandleSharedKey(key))
+            {
+                args.Handled = true;
+                return;
+            }
+
             if (key == Key.Tab && currentSuggestions.Count > 0)
             {
                 args.Handled = true;
@@ -267,20 +428,6 @@ internal sealed class TerminalGuiTuiHost
             {
                 args.Handled = true;
                 SubmitInput();
-                return;
-            }
-
-            if (key == (Key.CtrlMask | Key.D) && string.IsNullOrWhiteSpace(input.Text?.ToString()))
-            {
-                args.Handled = true;
-                Stop();
-                return;
-            }
-
-            if (key == (Key.CtrlMask | Key.C))
-            {
-                args.Handled = true;
-                Stop();
             }
         };
 
@@ -289,52 +436,70 @@ internal sealed class TerminalGuiTuiHost
         top.KeyPress += args =>
         {
             var key = args.KeyEvent.Key;
-            if (key == (Key.CtrlMask | Key.C))
+            if (HandleSharedKey(key))
             {
                 args.Handled = true;
-                Stop();
-                return;
-            }
-
-            if (key == (Key.CtrlMask | Key.D) && string.IsNullOrWhiteSpace(input.Text?.ToString()))
-            {
-                args.Handled = true;
-                Stop();
             }
         };
 
-        root.Add(title, profile, mode, cwdLabel, cwd, separator, transcript, suggestions, prompt, input, status);
+        root.Add(title, profile, mode, cwdLabel, cwd, separator, transcript, suggestions, choiceMenu, prompt, input, status);
         top.Add(root);
         input.SetFocus();
 
-        async Task<bool> ShowApprovalDialogAsync(ApprovalRequest request, CancellationToken ct)
+        async Task<string?> ShowChoiceMenuAsync(TuiChoiceMenuRequest request, CancellationToken ct)
         {
-            var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var tcs = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
             using var registration = ct.Register(() => tcs.TrySetCanceled(ct));
 
             Application.MainLoop.Invoke(() =>
             {
-                var message = TuiApprovalRequestFormatter.FormatForDialog(request, 1600);
-                var result = MessageBox.Query("Approval Required", message, "Approve", "Reject");
-                tcs.TrySetResult(result == 0);
-                RefreshTranscript();
+                activeChoiceMenu?.Completion.TrySetResult(null);
+                var state = new ChoiceMenuState(request.Items, request.InitialItemId);
+                activeChoiceMenu = new ActiveChoiceMenu(state, tcs);
+                currentSuggestions = Array.Empty<SlashCommand>();
+                selectedSuggestion = 0;
+                suggestions.SetSuggestions(currentSuggestions, selectedSuggestion);
+                choiceMenu.SetMenu(request.Title, request.Body, state);
             });
 
-            return await tcs.Task;
+            try
+            {
+                return await tcs.Task;
+            }
+            finally
+            {
+                Application.MainLoop.Invoke(() =>
+                {
+                    if (ReferenceEquals(activeChoiceMenu?.Completion, tcs))
+                    {
+                        activeChoiceMenu = null;
+                        choiceMenu.ClearMenu();
+                        RefreshSuggestions();
+                    }
+                });
+            }
+        }
+
+        async Task<bool> ShowApprovalMenuAsync(ApprovalRequest request, CancellationToken ct)
+        {
+            var body = TuiApprovalRequestFormatter.FormatForDialog(request, 1600);
+            var selected = await ShowChoiceMenuAsync(new TuiChoiceMenuRequest(
+                "Approval required",
+                body,
+                new[]
+                {
+                    new ChoiceMenuItem("reject", "Reject", "Do not run this tool request."),
+                    new ChoiceMenuItem("approve", "Approve", "Allow this tool request once.", IsDangerous: true)
+                },
+                "reject"), ct);
+            RefreshTranscript();
+            return string.Equals(selected, "approve", StringComparison.OrdinalIgnoreCase);
         }
     }
 
-    private static int SafeConsoleWidth()
-    {
-        try
-        {
-            return Math.Max(60, Console.WindowWidth - 4);
-        }
-        catch
-        {
-            return 100;
-        }
-    }
+    private sealed record ActiveChoiceMenu(
+        ChoiceMenuState State,
+        TaskCompletionSource<string?> Completion);
 
     private static string BuildStatusLine(TuiApp app, int spinnerFrame)
     {

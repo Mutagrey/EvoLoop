@@ -23,6 +23,12 @@ dotnet build EvoLoopAgent.sln --no-restore
 dotnet tests/Agent.Tests/bin/Debug/net8.0/Agent.Tests.dll
 ```
 
+The lightweight harness also accepts name filters for focused runs:
+
+```bash
+dotnet tests/Agent.Tests/bin/Debug/net8.0/Agent.Tests.dll TUI
+```
+
 ## Windows Packaging Validation
 
 Build:

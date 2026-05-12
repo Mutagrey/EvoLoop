@@ -14,7 +14,9 @@ internal sealed class TuiApp
     private ReviewDiffNavigator? _lastReviewDiff;
     private bool _taskRunning;
     private bool _modelThinking;
+    private CancellationTokenSource? _taskCancellation;
     private Func<ApprovalRequest, CancellationToken, Task<bool>>? _approvalPrompt;
+    private Func<TuiChoiceMenuRequest, CancellationToken, Task<string?>>? _choicePrompt;
     private Func<CancellationToken, Task<TuiRuntimeInfo>>? _configReload;
     private IConfigFileOpener _configFileOpener = new DefaultConfigFileOpener();
 
@@ -94,6 +96,11 @@ internal sealed class TuiApp
         _approvalPrompt = approvalPrompt;
     }
 
+    public void AttachChoicePrompt(Func<TuiChoiceMenuRequest, CancellationToken, Task<string?>> choicePrompt)
+    {
+        _choicePrompt = choicePrompt;
+    }
+
     public void AttachConfigReload(Func<CancellationToken, Task<TuiRuntimeInfo>> configReload)
     {
         _configReload = configReload;
@@ -102,6 +109,26 @@ internal sealed class TuiApp
     public void AttachConfigFileOpener(IConfigFileOpener opener)
     {
         _configFileOpener = opener;
+    }
+
+    public bool CancelRunningTask()
+    {
+        CancellationTokenSource? cancellation;
+        lock (_sync)
+        {
+            if (!_taskRunning || _taskCancellation is null || _taskCancellation.IsCancellationRequested)
+            {
+                return false;
+            }
+
+            _activity = "cancelling";
+            _messages.Add(TuiMessage.Status("cancelling current task"));
+            cancellation = _taskCancellation;
+        }
+
+        cancellation.Cancel();
+        Changed?.Invoke();
+        return true;
     }
 
     public TuiCommandResult Submit(string input)
@@ -149,9 +176,20 @@ internal sealed class TuiApp
 
         if (text.Equals("/model", StringComparison.OrdinalIgnoreCase))
         {
-            var message = FormatModel();
-            AddMessage(TuiMessage.System(message));
-            return new TuiCommandResult(true, false, false, message);
+            return await PickModelProfileAsync(ct);
+        }
+
+        if (text.StartsWith("/model ", StringComparison.OrdinalIgnoreCase))
+        {
+            var argument = text[7..].Trim();
+            if (argument.Equals("status", StringComparison.OrdinalIgnoreCase))
+            {
+                var message = FormatModel();
+                AddMessage(TuiMessage.System(message));
+                return new TuiCommandResult(true, false, false, message);
+            }
+
+            return SwitchModelProfile(argument);
         }
 
         if (text.Equals("/models", StringComparison.OrdinalIgnoreCase))
@@ -354,6 +392,7 @@ internal sealed class TuiApp
         }
 
         var busy = false;
+        CancellationTokenSource? runCancellation = null;
         lock (_sync)
         {
             if (_taskRunning)
@@ -362,6 +401,8 @@ internal sealed class TuiApp
             }
             else
             {
+                runCancellation = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                _taskCancellation = runCancellation;
                 _taskRunning = true;
                 _activity = executionMode == AgentExecutionMode.Plan ? "planning" : executionMode == AgentExecutionMode.Review ? "reviewing" : "running";
                 _messages.Add(TuiMessage.Status($"{_activity}: {task}"));
@@ -380,7 +421,13 @@ internal sealed class TuiApp
         try
         {
             var observer = new TuiRuntimeObserver(this);
-            var outcome = await _taskRunner.RunAsync(task, Runtime.Profile, executionMode, approvalMode, observer, ct);
+            var outcome = await _taskRunner.RunAsync(
+                task,
+                Runtime.Profile,
+                executionMode,
+                approvalMode,
+                observer,
+                runCancellation?.Token ?? ct);
             var result = outcome.Result;
             if (executionMode == AgentExecutionMode.Plan)
             {
@@ -400,15 +447,27 @@ internal sealed class TuiApp
 
             return new TuiCommandResult(true, false, !result.Success, result.FinalMessage);
         }
+        catch (OperationCanceledException) when (runCancellation?.IsCancellationRequested == true || ct.IsCancellationRequested)
+        {
+            const string message = "Task cancelled.";
+            AddMessage(TuiMessage.Status(message));
+            return new TuiCommandResult(true, false, true, message);
+        }
         finally
         {
             lock (_sync)
             {
+                if (ReferenceEquals(_taskCancellation, runCancellation))
+                {
+                    _taskCancellation = null;
+                }
+
                 _taskRunning = false;
                 _modelThinking = false;
                 _activity = "idle";
             }
 
+            runCancellation?.Dispose();
             Changed?.Invoke();
         }
     }
@@ -529,6 +588,88 @@ internal sealed class TuiApp
             $"|- auth: {(Runtime.ApiAuthConfigured ? "present" : "missing")}",
             $"`- status: {Runtime.ModelStatus}"
         });
+    }
+
+    private async Task<TuiCommandResult> PickModelProfileAsync(CancellationToken ct)
+    {
+        var prompt = _choicePrompt;
+        if (prompt is null)
+        {
+            const string unavailable = "Model picker is not attached. Use /model status or /model <profile>.";
+            AddMessage(TuiMessage.Error(unavailable));
+            return new TuiCommandResult(false, false, true, unavailable);
+        }
+
+        var request = new TuiChoiceMenuRequest(
+            "Select model profile",
+            "Selection applies to this TUI session only. Config is not changed.",
+            BuildModelChoiceItems(),
+            Runtime.Profile);
+        var selected = await prompt(request, ct);
+        if (string.IsNullOrWhiteSpace(selected))
+        {
+            const string cancelled = "Model selection cancelled.";
+            AddStatus(cancelled);
+            return new TuiCommandResult(true, false, false, cancelled);
+        }
+
+        return SwitchModelProfile(selected);
+    }
+
+    private TuiCommandResult SwitchModelProfile(string profileName)
+    {
+        var profile = FindModelProfile(profileName);
+        if (profile is null)
+        {
+            var configured = Runtime.ModelProfiles.Count == 0
+                ? "<none>"
+                : string.Join(", ", Runtime.ModelProfiles);
+            var message = $"Unknown model profile: {profileName}. Configured profiles: {configured}.";
+            AddMessage(TuiMessage.Error(message));
+            return new TuiCommandResult(false, false, true, message);
+        }
+
+        Runtime = Runtime with
+        {
+            Profile = profile.Name,
+            ModelProvider = profile.Provider,
+            ModelId = profile.ModelId,
+            ToolCallingMode = profile.ToolCallingMode
+        };
+        var changed = $"Model profile switched to {profile.Name} ({profile.ModelId}) for this TUI session.";
+        AddStatus(changed);
+        return new TuiCommandResult(true, false, false, changed);
+    }
+
+    private IReadOnlyList<ChoiceMenuItem> BuildModelChoiceItems()
+    {
+        var details = Runtime.ModelProfileDetails.Count == 0
+            ? Runtime.ModelProfiles
+                .Select(name => new TuiModelProfileInfo(name, Runtime.ModelProvider, Runtime.ModelId, Runtime.ToolCallingMode))
+                .ToArray()
+            : Runtime.ModelProfileDetails;
+
+        return details
+            .Select(profile => new ChoiceMenuItem(
+                profile.Name,
+                profile.Name,
+                $"{profile.Provider}; model {profile.ModelId}; tools {profile.ToolCallingMode}",
+                profile.Name.Equals(Runtime.Profile, StringComparison.OrdinalIgnoreCase)))
+            .ToArray();
+    }
+
+    private TuiModelProfileInfo? FindModelProfile(string profileName)
+    {
+        return Runtime.ModelProfileDetails.FirstOrDefault(profile =>
+                   profile.Name.Equals(profileName, StringComparison.OrdinalIgnoreCase)) ??
+               Runtime.ModelProfiles
+                   .Where(profile => profile.Equals(profileName, StringComparison.OrdinalIgnoreCase))
+                   .Select(profile => new TuiModelProfileInfo(
+                       profile,
+                       Runtime.ModelProvider,
+                       Runtime.ModelId,
+                       Runtime.ToolCallingMode))
+                   .FirstOrDefault();
     }
 
     private string FormatModels()
