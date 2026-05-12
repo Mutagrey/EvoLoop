@@ -44,6 +44,14 @@ Available themes:
 - `/config path`: show loaded and default config paths.
 - `/config open`: open the loaded config file with `$VISUAL`, `$EDITOR`, or Windows `notepad.exe`.
 - `/config reload`: reload config and rebuild the runtime host.
+- `/sessions [count]`: list recent sessions from `.evoloop/storage/sessions.jsonl`.
+- `/session <id>`: show one session's steps and recent events by id or prefix.
+- `/storage`: show JSONL, memory, sqlite, and snapshot storage sizes.
+- `/storage archive`: rotate session/event/step JSONL files into `.evoloop/storage/archive`.
+- `/storage prune --keep N`: keep the latest N sessions and related event/step lines after making an archive copy.
+- `/memory`: show recent workspace memory summaries.
+- `/compact`: write a manual visible-transcript summary as a `context_summary` event and memory entry.
+- `/clear`: clear the visible transcript only.
 - `/plan <task>`: run read-only plan mode.
 - `/review [focus]`: review current workspace changes.
 - `/diff`: show the current file from the latest review diff.
@@ -73,7 +81,7 @@ dotnet run --project src/Agent.Tui --
 ## Known Limitations
 
 - `/config` is still a rendered settings summary, not a full settings editor.
-- No session list yet.
+- `/compact` summarizes visible TUI context for future runs; it does not rewrite a model request already in progress.
 
 ## Migration Notes
 

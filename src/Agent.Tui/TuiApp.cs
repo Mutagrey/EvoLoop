@@ -169,6 +169,35 @@ internal sealed class TuiApp
             return new TuiCommandResult(true, false, false, message);
         }
 
+        if (text.Equals("/clear", StringComparison.OrdinalIgnoreCase))
+        {
+            return ClearTranscript();
+        }
+
+        if (text.Equals("/memory", StringComparison.OrdinalIgnoreCase))
+        {
+            var message = Runtime.MemoryEnabled
+                ? TuiStorageInspector.FormatMemory(Runtime.Workspace)
+                : "Memory is disabled in runtime config.";
+            AddMessage(TuiMessage.System(message));
+            return new TuiCommandResult(true, false, false, message);
+        }
+
+        if (text.Equals("/compact", StringComparison.OrdinalIgnoreCase))
+        {
+            return CompactVisibleContext();
+        }
+
+        if (TryHandleSessionsCommand(text, out var sessionsResult))
+        {
+            return sessionsResult;
+        }
+
+        if (TryHandleStorageCommand(text, out var storageResult))
+        {
+            return storageResult;
+        }
+
         if (TryHandleDiffCommand(text, out var diffResult))
         {
             return diffResult;
@@ -301,7 +330,7 @@ internal sealed class TuiApp
 
     private void AddStartupMessages()
     {
-        AddMessage(TuiMessage.System("TUI shell ready. Type a task, /plan <task>, /review [focus], /diff, /model, /skills, /config, /status, /help, or /exit."));
+        AddMessage(TuiMessage.System("TUI shell ready. Type a task, /plan <task>, /review [focus], /diff, /model, /skills, /sessions, /storage, /compact, /status, /help, or /exit."));
         AddStatus($"Workspace: {Runtime.Workspace}");
         AddStatus($"Model profile: {Runtime.Profile}; model: {Runtime.ModelId}; runtime mode: {Runtime.ModeLabel}");
 
@@ -376,6 +405,51 @@ internal sealed class TuiApp
         }
 
         Changed?.Invoke();
+    }
+
+    private TuiCommandResult ClearTranscript()
+    {
+        const string message = "Transcript cleared. Session history on disk is unchanged.";
+        lock (_sync)
+        {
+            _messages.Clear();
+            _messages.Add(TuiMessage.Status(message));
+            _activity = "idle";
+            _modelThinking = false;
+        }
+
+        Changed?.Invoke();
+        return new TuiCommandResult(true, false, false, message);
+    }
+
+    private TuiCommandResult CompactVisibleContext()
+    {
+        IReadOnlyList<TuiMessage> snapshot;
+        lock (_sync)
+        {
+            if (_taskRunning)
+            {
+                const string busy = "Cannot compact while a task is running. Current runtime history cannot be changed mid-run.";
+                _messages.Add(TuiMessage.Error(busy));
+                Changed?.Invoke();
+                return new TuiCommandResult(false, false, true, busy);
+            }
+
+            snapshot = _messages.ToList();
+        }
+
+        try
+        {
+            var compact = TuiStorageInspector.Compact(Runtime, snapshot, _lastRun, _lastPlan);
+            AddMessage(compact.Success ? TuiMessage.Status(compact.Message) : TuiMessage.Error(compact.Message));
+            return new TuiCommandResult(true, false, !compact.Success, compact.Message);
+        }
+        catch (Exception ex)
+        {
+            var message = $"Compact failed: {ex.Message}";
+            AddMessage(TuiMessage.Error(message));
+            return new TuiCommandResult(false, false, true, message);
+        }
     }
 
     private async Task<TuiCommandResult> RunTaskAsync(
@@ -560,6 +634,105 @@ internal sealed class TuiApp
         AddMessage(isError ? TuiMessage.Error(rendered) : TuiMessage.System(rendered));
         result = new TuiCommandResult(true, false, isError, rendered);
         return true;
+    }
+
+    private bool TryHandleSessionsCommand(string text, out TuiCommandResult result)
+    {
+        result = new TuiCommandResult(false, false, false, string.Empty);
+        if (text.Equals("/sessions", StringComparison.OrdinalIgnoreCase) ||
+            text.StartsWith("/sessions ", StringComparison.OrdinalIgnoreCase))
+        {
+            var countText = text.Length > 9 ? text[9..].Trim() : string.Empty;
+            var count = int.TryParse(countText, out var parsed) ? parsed : 20;
+            var message = TuiStorageInspector.FormatSessions(Runtime.Workspace, count);
+            AddMessage(TuiMessage.System(message));
+            result = new TuiCommandResult(true, false, false, message);
+            return true;
+        }
+
+        if (text.StartsWith("/session ", StringComparison.OrdinalIgnoreCase))
+        {
+            var id = text[9..].Trim();
+            if (string.IsNullOrWhiteSpace(id))
+            {
+                const string usage = "Usage: /session <id>";
+                AddMessage(TuiMessage.Error(usage));
+                result = new TuiCommandResult(true, false, true, usage);
+                return true;
+            }
+
+            var message = TuiStorageInspector.FormatSession(Runtime.Workspace, id);
+            var isError = message.StartsWith("Session not found", StringComparison.OrdinalIgnoreCase) ||
+                          message.StartsWith("Session id is ambiguous", StringComparison.OrdinalIgnoreCase);
+            AddMessage(isError ? TuiMessage.Error(message) : TuiMessage.System(message));
+            result = new TuiCommandResult(true, false, isError, message);
+            return true;
+        }
+
+        return false;
+    }
+
+    private bool TryHandleStorageCommand(string text, out TuiCommandResult result)
+    {
+        result = new TuiCommandResult(false, false, false, string.Empty);
+        if (!text.Equals("/storage", StringComparison.OrdinalIgnoreCase) &&
+            !text.StartsWith("/storage ", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var args = text.Length > 8 ? text[8..].Trim() : string.Empty;
+        if (string.IsNullOrWhiteSpace(args))
+        {
+            var message = TuiStorageInspector.FormatStorage(Runtime.Workspace);
+            AddMessage(TuiMessage.System(message));
+            result = new TuiCommandResult(true, false, false, message);
+            return true;
+        }
+
+        TuiStorageCommandResult storageResult;
+        if (args.Equals("archive", StringComparison.OrdinalIgnoreCase))
+        {
+            storageResult = TuiStorageInspector.Archive(Runtime.Workspace);
+        }
+        else if (args.StartsWith("prune", StringComparison.OrdinalIgnoreCase))
+        {
+            if (!TryParseKeepCount(args, out var keep))
+            {
+                const string usage = "Usage: /storage prune --keep N";
+                AddMessage(TuiMessage.Error(usage));
+                result = new TuiCommandResult(true, false, true, usage);
+                return true;
+            }
+
+            storageResult = TuiStorageInspector.Prune(Runtime.Workspace, keep);
+        }
+        else
+        {
+            const string usage = "Usage: /storage, /storage archive, or /storage prune --keep N";
+            AddMessage(TuiMessage.Error(usage));
+            result = new TuiCommandResult(true, false, true, usage);
+            return true;
+        }
+
+        AddMessage(storageResult.Success ? TuiMessage.Status(storageResult.Message) : TuiMessage.Error(storageResult.Message));
+        result = new TuiCommandResult(true, false, !storageResult.Success, storageResult.Message);
+        return true;
+    }
+
+    private static bool TryParseKeepCount(string args, out int keep)
+    {
+        keep = 0;
+        var parts = args.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        for (var i = 0; i < parts.Length; i++)
+        {
+            if (parts[i].Equals("--keep", StringComparison.OrdinalIgnoreCase) && i + 1 < parts.Length)
+            {
+                return int.TryParse(parts[i + 1], out keep) && keep > 0;
+            }
+        }
+
+        return false;
     }
 
     private void StoreReviewDiff(string? reviewSummary)

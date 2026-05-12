@@ -29,6 +29,22 @@ The lightweight harness also accepts name filters for focused runs:
 dotnet tests/Agent.Tests/bin/Debug/net8.0/Agent.Tests.dll TUI
 ```
 
+## Field Test Harness
+
+Use the field-test harness for controlled real-agent runs against a sandbox workspace:
+
+```bash
+scripts/field-test-agent.sh
+```
+
+Windows:
+
+```cmd
+scripts\field-test-agent.cmd
+```
+
+The harness writes results under `artifacts/field-tests/<timestamp>/`, including command logs, stdout/stderr, storage size snapshots, line counts, and git diffs after each case. It covers read/search, plan, review, small edit, undo, path-safety denial, failed tool handling, approval rejection, and the fake-model bad-output regression case.
+
 ## Windows Packaging Validation
 
 Build:
@@ -62,6 +78,9 @@ Smoke test on target machine:
 - symlink traversal -> writes and patches through symlinked directories cannot escape the workspace
 - fallback scanner -> skips `.git`, `.evoloop/storage`, `bin`, `obj`, `artifacts`, and binary files while tolerating inaccessible paths
 - typed JSONL event log -> session/model/tool/approval/final events are persisted under `.evoloop/storage/events.jsonl`
+- TUI session/storage inspection -> `/sessions`, `/session <id>`, `/storage`, and `/memory` read local JSONL/memory state
+- TUI storage maintenance -> `/storage archive` rotates session/event/step JSONL and `/storage prune --keep N` keeps recent related records after an archive copy
+- TUI context compaction -> `/compact` writes a `context_summary` event and memory entry when no task is running
 - native non-streaming tools -> OpenAI-compatible `choices[].message.tool_calls` normalize to `ToolCallBlock`, execute locally, and append `role=tool` results
 - native streaming tools -> fragmented `choices[].delta.tool_calls[].function.arguments` reconstruct into valid JSON arguments
 - JSON-ReAct fallback -> strict JSON tool/final objects execute through the same policy and tool executor

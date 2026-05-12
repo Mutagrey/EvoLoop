@@ -39,14 +39,20 @@ internal sealed class SlashCommandRegistry
                 "Show available commands.",
                 "/help",
                 registry => new TuiCommandResult(true, false, false, registry.BuildHelpText())),
+            AppHandled("/clear", "Clear visible transcript.", "/clear"),
+            AppHandled("/compact", "Summarize visible context into storage.", "/compact"),
             AppHandled("/config", "Show grouped runtime config.", "/config [path|open|reload]"),
             AppHandled("/diff", "Navigate latest review diff.", "/diff [files|next|prev|number]"),
+            AppHandled("/memory", "Show workspace memory.", "/memory"),
             AppHandled("/model", "Pick or show active model profile.", "/model [profile|status]"),
             AppHandled("/models", "List model profiles and fallback order.", "/models"),
             AppHandled("/plan", "Run read-only plan mode.", "/plan <task>"),
             AppHandled("/review", "Review current workspace changes.", "/review [focus]"),
+            AppHandled("/session", "Show one session by id or prefix.", "/session <id>"),
+            AppHandled("/sessions", "List recent sessions.", "/sessions [count]"),
             AppHandled("/skills", "List workspace skills.", "/skills"),
             AppHandled("/status", "Show last task status.", "/status"),
+            AppHandled("/storage", "Show, archive, or prune storage.", "/storage [archive|prune --keep N]"),
             AppHandled("/task", "Run a normal task explicitly.", "/task <text>")
         });
     }
@@ -99,7 +105,7 @@ internal sealed class SlashCommandRegistry
 
         sb.AppendLine();
         sb.AppendLine("Task input runs through the shared agent runtime.");
-        sb.AppendLine("Use /model, /models, /skills, /config, /status, /plan <task>, /review [focus], /diff, or plain text for run mode.");
+        sb.AppendLine("Use /model, /models, /skills, /config, /sessions, /storage, /status, /plan <task>, /review [focus], /diff, or plain text for run mode.");
         sb.AppendLine("After /review, use /diff files, /diff next, /diff prev, or /diff <number>.");
         return sb.ToString().TrimEnd();
     }

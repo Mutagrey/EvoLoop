@@ -74,6 +74,12 @@ The minimal shell supports:
 - `/model <profile>`
 - `/models`
 - `/skills`
+- `/sessions [count]`
+- `/session <id>`
+- `/storage`, `/storage archive`, `/storage prune --keep N`
+- `/memory`
+- `/compact`
+- `/clear`
 - `/plan <task>`
 - `/review [focus]`
 - `/diff`, `/diff files`, `/diff next`, `/diff prev`, `/diff <number>`
@@ -90,7 +96,7 @@ Default styling is a dark terminal palette: black background, gray text, muted c
 
 ## Next Implementation Phase
 
-Add session or memory inspection commands without changing Core, Tools, Providers, or Storage ownership.
+Add `/theme`, `/tools`, and `/doctor` commands without changing Core, Tools, Providers, or Storage ownership.
 
 ## Command Roadmap
 
@@ -100,12 +106,10 @@ Implemented command surfaces:
 - `/skills`: workspace skill index.
 - `/config`: structured runtime config and config file actions.
 - `/review`, `/diff`: review execution and latest diff navigation.
+- `/sessions`, `/session`, `/storage`, `/memory`, `/compact`, `/clear`: local session, storage, memory, and context-maintenance surfaces.
 
 Next candidates:
 
-- `/clear`: clear visible transcript only.
-- `/sessions`: list recent session summaries from JSONL/session storage.
-- `/memory`: inspect loaded workspace memory summaries.
 - `/theme`: switch between `claude-dark` and `mono` at runtime.
 - `/tools`: list available tools and policy modes.
 - `/doctor`: show capability probe output inside TUI.

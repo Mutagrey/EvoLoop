@@ -27,6 +27,9 @@ internal static class TuiTests
         ("TUI config path command shows config paths", TestTuiConfigPathCommandShowsConfigPaths),
         ("TUI config open command uses attached opener", TestTuiConfigOpenCommandUsesAttachedOpener),
         ("TUI config reload updates runtime info", TestTuiConfigReloadUpdatesRuntimeInfo),
+        ("TUI app inspects sessions storage memory and compacts context", TestTuiStorageSessionMemoryAndCompactCommands),
+        ("TUI app prunes and archives storage logs", TestTuiStoragePruneAndArchiveCommands),
+        ("TUI app clears transcript and rejects busy compact", TestTuiClearAndBusyCompactCommands),
         ("TUI runtime observer records agent events", TestTuiRuntimeObserverRecordsEvents),
         ("TUI app tracks model thinking state", TestTuiAppTracksModelThinkingState),
         ("TUI runtime formatter renders compact tool events", TestTuiRuntimeFormatterToolEvents),
@@ -366,6 +369,104 @@ static async Task TestTuiConfigReloadUpdatesRuntimeInfo()
     Assert(app.Runtime.ModelId == "reloaded-model", "Expected model id to update.");
 }
 
+static Task TestTuiStorageSessionMemoryAndCompactCommands()
+{
+    var workspace = CreateStorageWorkspace();
+    try
+    {
+        WriteStorageSample(workspace, "aaaaaaaaaaaa1111", "completed", DateTimeOffset.UtcNow.AddMinutes(-2), "inspect files");
+        var app = CreateTestTuiApp(CreateRuntimeForWorkspace(workspace));
+
+        var sessions = app.Submit("/sessions");
+        Assert(sessions.Handled, "Expected /sessions to be handled.");
+        Assert(sessions.Message.Contains("aaaaaaaaaaaa", StringComparison.Ordinal), "Expected session id in list.");
+        Assert(sessions.Message.Contains("inspect files", StringComparison.Ordinal), "Expected task in session list.");
+
+        var session = app.Submit("/session aaaaaaaaaaaa");
+        Assert(session.Handled, "Expected /session to be handled.");
+        Assert(session.Message.Contains("fs_read", StringComparison.Ordinal), "Expected session steps.");
+        Assert(session.Message.Contains("final: done", StringComparison.Ordinal), "Expected final answer event.");
+
+        var storage = app.Submit("/storage");
+        Assert(storage.Handled, "Expected /storage to be handled.");
+        Assert(storage.Message.Contains("sessions.jsonl", StringComparison.Ordinal), "Expected sessions file stats.");
+        Assert(storage.Message.Contains("snapshots", StringComparison.Ordinal), "Expected snapshot stats.");
+
+        var memory = app.Submit("/memory");
+        Assert(memory.Handled, "Expected /memory to be handled.");
+        Assert(memory.Message.Contains("Workspace Memory", StringComparison.Ordinal), "Expected memory heading.");
+        Assert(memory.Message.Contains("tools=fs_read", StringComparison.Ordinal), "Expected memory summary.");
+
+        var compact = app.Submit("/compact");
+        Assert(compact.Handled, "Expected /compact to be handled.");
+        Assert(!compact.IsError, "Expected /compact to succeed.");
+        var events = File.ReadAllText(Path.Combine(workspace, ".evoloop", "storage", "events.jsonl"));
+        Assert(events.Contains("context_summary", StringComparison.Ordinal), "Expected compact event to be written.");
+        var memoryRuns = File.ReadAllText(Path.Combine(workspace, ".evoloop", "storage", "memory-runs.jsonl"));
+        Assert(memoryRuns.Contains("Manual TUI context compaction", StringComparison.Ordinal), "Expected compact summary to update memory.");
+    }
+    finally
+    {
+        Directory.Delete(workspace, true);
+    }
+
+    return Task.CompletedTask;
+}
+
+static Task TestTuiStoragePruneAndArchiveCommands()
+{
+    var workspace = CreateStorageWorkspace();
+    try
+    {
+        WriteStorageSample(workspace, "oldsession0001", "completed", DateTimeOffset.UtcNow.AddMinutes(-10), "old task");
+        WriteStorageSample(workspace, "newsession0002", "completed", DateTimeOffset.UtcNow.AddMinutes(-1), "new task");
+        var app = CreateTestTuiApp(CreateRuntimeForWorkspace(workspace));
+
+        var prune = app.Submit("/storage prune --keep 1");
+        Assert(prune.Handled, "Expected /storage prune to be handled.");
+        Assert(!prune.IsError, "Expected prune to succeed.");
+        var sessionsAfterPrune = File.ReadAllText(Path.Combine(workspace, ".evoloop", "storage", "sessions.jsonl"));
+        Assert(sessionsAfterPrune.Contains("newsession0002", StringComparison.Ordinal), "Expected latest session to remain.");
+        Assert(!sessionsAfterPrune.Contains("oldsession0001", StringComparison.Ordinal), "Expected old session to be pruned.");
+
+        var archive = app.Submit("/storage archive");
+        Assert(archive.Handled, "Expected /storage archive to be handled.");
+        Assert(!archive.IsError, "Expected archive to succeed.");
+        var sessionsPath = Path.Combine(workspace, ".evoloop", "storage", "sessions.jsonl");
+        Assert(File.ReadAllText(sessionsPath).Trim().Length == 0, "Expected sessions log to be rotated to an empty file.");
+        var archiveRoot = Path.Combine(workspace, ".evoloop", "storage", "archive");
+        Assert(Directory.Exists(archiveRoot), "Expected archive directory.");
+        Assert(Directory.EnumerateFiles(archiveRoot, "sessions.jsonl", SearchOption.AllDirectories).Any(), "Expected archived sessions file.");
+    }
+    finally
+    {
+        Directory.Delete(workspace, true);
+    }
+
+    return Task.CompletedTask;
+}
+
+static async Task TestTuiClearAndBusyCompactCommands()
+{
+    var app = CreateTestTuiApp();
+    var clear = app.Submit("/clear");
+    Assert(clear.Handled, "Expected /clear to be handled.");
+    Assert(app.Messages.Count == 1, "Expected transcript to contain only clear status.");
+    Assert(app.Messages[0].Content.Contains("Transcript cleared", StringComparison.Ordinal), "Expected clear status.");
+
+    var runner = new BlockingTuiTaskRunner();
+    app.AttachTaskRunner(runner);
+    var run = app.SubmitAsync("long task", CancellationToken.None);
+    await runner.Started.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+    var compact = app.Submit("/compact");
+    Assert(compact.IsError, "Expected compact during active task to be rejected.");
+    Assert(compact.Message.Contains("Cannot compact while a task is running", StringComparison.Ordinal), "Expected busy compact message.");
+
+    app.CancelRunningTask();
+    await run;
+}
+
 static async Task TestTuiRuntimeObserverRecordsEvents()
 {
     var app = CreateTestTuiApp();
@@ -686,6 +787,49 @@ static TuiApp CreateTestTuiApp(TuiRuntimeInfo? runtime = null)
             true,
             false),
         SlashCommandRegistry.CreateDefault());
+}
+
+static TuiRuntimeInfo CreateRuntimeForWorkspace(string workspace)
+{
+    return new TuiRuntimeInfo(
+        workspace,
+        workspace,
+        "reasoning",
+        "full",
+        "model ready",
+        ApprovalPolicyMode.AutoEdit,
+        TuiTheme.DefaultName,
+        false,
+        true,
+        true);
+}
+
+static string CreateStorageWorkspace()
+{
+    var workspace = Path.Combine(Path.GetTempPath(), "agent-tui-storage-" + Guid.NewGuid().ToString("n"));
+    Directory.CreateDirectory(Path.Combine(workspace, ".evoloop", "storage"));
+    return workspace;
+}
+
+static void WriteStorageSample(string workspace, string sessionId, string status, DateTimeOffset started, string task)
+{
+    static string J(string value) => System.Text.Json.JsonSerializer.Serialize(value);
+
+    var storage = Path.Combine(workspace, ".evoloop", "storage");
+    Directory.CreateDirectory(storage);
+    File.AppendAllText(
+        Path.Combine(storage, "sessions.jsonl"),
+        $"{{\"type\":\"session_start\",\"sessionId\":\"{sessionId}\",\"startedAtUtc\":\"{started:O}\",\"workspaceRoot\":{J(workspace)},\"profile\":\"reasoning\",\"task\":{J(task)}}}\n" +
+        $"{{\"type\":\"session_end\",\"sessionId\":\"{sessionId}\",\"finalStatus\":\"{status}\",\"completedAtUtc\":\"{started.AddSeconds(30):O}\"}}\n");
+    File.AppendAllText(
+        Path.Combine(storage, "steps.jsonl"),
+        $"{{\"SessionId\":\"{sessionId}\",\"StepNumber\":1,\"Action\":\"tool\",\"ToolName\":\"fs_read\",\"Reasoning\":\"read\",\"Success\":true,\"Output\":\"read ok\",\"TimestampUtc\":\"{started.AddSeconds(10):O}\",\"DurationMs\":5}}\n");
+    File.AppendAllText(
+        Path.Combine(storage, "events.jsonl"),
+        $"{{\"SessionId\":\"{sessionId}\",\"EventType\":\"final_answer\",\"TimestampUtc\":\"{started.AddSeconds(20):O}\",\"Message\":\"done\",\"Success\":true}}\n");
+    File.AppendAllText(
+        Path.Combine(storage, "memory-runs.jsonl"),
+        $"{{\"SessionId\":\"{sessionId}\",\"CompletedAtUtc\":\"{started.AddSeconds(30):O}\",\"Task\":{J(task)},\"Success\":true,\"FinalMessage\":\"done\",\"Summary\":\"tools=fs_read\",\"Highlights\":[\"read ok\"],\"RankScore\":0.0,\"ProjectId\":\"\",\"WorkspaceRoot\":{J(workspace)},\"WorkspaceRootHash\":\"\"}}\n");
 }
 
 internal sealed class CapturingTuiTaskRunner : ITuiTaskRunner

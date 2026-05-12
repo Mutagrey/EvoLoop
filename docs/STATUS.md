@@ -90,6 +90,8 @@ Ordered refactor work follows `docs/architecture/refactor-plan.md`; this file re
 - Added scrollable TUI transcript navigation so long `/config` output can be read with `PageUp`, `PageDown`, `Home`, `End`, and supported mouse wheels.
 - Added a reusable TUI picker used by `/model` session profile switching and approval prompts; `/model status` keeps the previous model summary output.
 - Added TUI task cancellation through `Esc` while keeping `Esc` as picker cancel when a picker is active.
+- Added TUI session, storage, memory, transcript clear, and manual context compaction commands: `/sessions`, `/session <id>`, `/storage`, `/storage archive`, `/storage prune --keep N`, `/memory`, `/clear`, and `/compact`.
+- Added `context_summary` event records for manual TUI compaction and a sandboxed field-test harness under `scripts/field-test-agent.*`.
 
 ## Current Problems
 
@@ -97,10 +99,11 @@ Ordered refactor work follows `docs/architecture/refactor-plan.md`; this file re
 - The agent still depends on a remote/local model gateway for autonomous `run` and `plan` execution; `local-only degraded` mode is still diagnostic-safe, not a replacement for a local model runtime.
 - `dotnet run --project tests/Agent.Tests/Agent.Tests.csproj` can still hang in this macOS workspace while spawning MSBuild child nodes; build the solution first and run the compiled test DLL directly as documented in `docs/TESTING.md`.
 - TUI `/config` is still a rendered settings summary, not a full settings editor.
+- TUI `/compact` records a visible-transcript summary for future context; it does not rewrite an already running model turn.
 
 ## Next Improvements
 
 - Resolve the executable-project build hang in this macOS workspace and re-run the full test harness.
 - Smoke-test the self-contained Windows artifact on a restricted non-admin machine.
 - Exercise native tool calling against real corporate OpenAI-compatible gateways in all supported modes.
-- Add TUI session or memory inspection commands.
+- Add TUI `/doctor`, `/tools`, and runtime `/theme` switching.

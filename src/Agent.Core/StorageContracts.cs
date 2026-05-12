@@ -67,4 +67,5 @@ public static class AgentEventTypes
     public const string ToolCall = "tool_call";
     public const string ToolResult = "tool_result";
     public const string FileMutation = "file_mutation";
+    public const string ContextSummary = "context_summary";
 }
